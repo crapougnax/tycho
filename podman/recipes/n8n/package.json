@@ -2,5 +2,6 @@
   "name": "n8n",
   "version": "1.0.0",
   "description": "Workflow automation tool.",
+  "requiredEnv": ["N8N_SUBDOMAIN"],
   "license": "FairCode"
 }

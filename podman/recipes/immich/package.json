@@ -2,5 +2,6 @@
   "name": "immich",
   "version": "1.0.0",
   "description": "High performance self-hosted photo and video management solution.",
+  "requiredEnv": ["UPLOAD_LOCATION", "DB_DATA_LOCATION", "DB_PASSWORD"],
   "license": "AGPL-3.0"
 }

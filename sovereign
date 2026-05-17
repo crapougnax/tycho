@@ -3,7 +3,6 @@
 # sovereign - Autonomous Server Management CLI (GitHub backed)
 
 # Configuration
-# These can be overridden by environment variables (e.g., in ~/.sovereign/.env)
 REPO_USER="${REPO_USER:-crapougnax}"
 REPO_NAME="${REPO_NAME:-sovereign}"
 REPO_BRANCH="${REPO_BRANCH:-main}"
@@ -39,12 +38,29 @@ function fetch_remote_recipe() {
     curl -s -f "$GITHUB_RAW/$PLATFORM/$pkg/compose.yml" -o "$target_dir/compose.yaml" || \
     error "Failed to fetch recipe $pkg from $GITHUB_RAW"
     
+    # Fetch package.json if it exists
+    curl -s -f "$GITHUB_RAW/$PLATFORM/$pkg/package.json" -o "$target_dir/package.json" 2>/dev/null
+
     # Also fetch dynamic config if it's traefik
     if [[ "$pkg" == "core/traefik" ]]; then
         log "Fetching Traefik dynamic configuration..."
         mkdir -p "$target_dir/traefik-dynamic"
-        # This is a bit simplified, ideally we'd list files
         curl -s -f "$GITHUB_RAW/$PLATFORM/$pkg/traefik-dynamic/dashboard.yaml" -o "$target_dir/traefik-dynamic/dashboard.yaml"
+    fi
+}
+
+function check_required_config() {
+    local pkg_dir=$1
+    if [ -f "$pkg_dir/package.json" ]; then
+        local required=$(jq -r '.requiredEnv[]?' "$pkg_dir/package.json")
+        for var in $required; do
+            if ! grep -q "^$var=" "$ENV_FILE"; then
+                log "Missing required configuration: $var"
+                read -p "Enter value for $var: " value
+                echo "$var=$value" >> "$ENV_FILE"
+                log "Added $var to $ENV_FILE"
+            fi
+        done
     fi
 }
 
@@ -58,7 +74,6 @@ function do_setup() {
         [[ "$overwrite" != "y" ]] && exit 0
     fi
 
-    # Fetch .env.dist from remote if not local
     if [ ! -f "$WORK_DIR/.env.dist" ]; then
         curl -s -f "$GITHUB_RAW/.env.dist" -o "$WORK_DIR/.env.dist" || error "Could not fetch .env.dist"
     fi
@@ -77,24 +92,59 @@ function do_setup() {
 function do_install() {
     check_env
     local pkg=$1
-    [[ -z "$pkg" ]] && error "Usage: sovereign install <package> (e.g., core/traefik, recipes/immich)"
+    [[ -z "$pkg" ]] && error "Usage: sovereign install <package> (e.g., traefik, immich)"
 
-    # If the path doesn't contain a slash, assume it's a recipe
     if [[ "$pkg" != *"/"* ]]; then
         pkg="recipes/$pkg"
     fi
 
-    # Always fetch/update from remote to ensure we have the latest recipe
-    fetch_remote_recipe "$pkg"
+    # 1. Confirmation
+    read -p "Are you sure you want to install/update $pkg? (y/N): " confirm
+    [[ "$confirm" != "y" ]] && exit 0
 
-    log "Installing $pkg..."
-    cd "$WORK_DIR/$PLATFORM/$pkg" && podman compose --env-file "$ENV_FILE" up -d
+    # 2. Fetch
+    fetch_remote_recipe "$pkg"
+    local target_dir="$WORK_DIR/$PLATFORM/$pkg"
+
+    # 3. Check for missing config
+    check_required_config "$target_dir"
+
+    # 4. Install
+    log "Deploying $pkg..."
+    cd "$target_dir" && podman compose --env-file "$ENV_FILE" up -d
+}
+
+function do_uninstall() {
+    check_env
+    local pkg=$1
+    [[ -z "$pkg" ]] && error "Usage: sovereign uninstall <package>"
+
+    if [[ "$pkg" != *"/"* ]]; then
+        pkg="recipes/$pkg"
+    fi
+
+    local target_dir="$WORK_DIR/$PLATFORM/$pkg"
+    if [ ! -d "$target_dir" ]; then
+        error "Package $pkg is not installed locally."
+    fi
+
+    read -p "Are you sure you want to UNINSTALL $pkg? This will stop services. (y/N): " confirm
+    [[ "$confirm" != "y" ]] && exit 0
+
+    log "Uninstalling $pkg..."
+    cd "$target_dir" && podman compose --env-file "$ENV_FILE" down
+    
+    read -p "Delete local recipe files for $pkg? (y/N): " cleanup
+    if [[ "$cleanup" == "y" ]]; then
+        rm -rf "$target_dir"
+        log "Local files for $pkg removed."
+    fi
+    
+    log "$pkg has been uninstalled."
 }
 
 function do_list() {
     log "Fetching available recipes from GitHub..."
-    
-    # Check for jq
     if ! command -v jq &> /dev/null; then
         error "Listing recipes requires 'jq'. Please install it (sudo apt install jq)."
     fi
@@ -110,9 +160,7 @@ function do_list() {
     printf "\e[1m%-20s %s\e[0m\n" "RECIPE" "DESCRIPTION"
     echo "------------------------------------------------------------"
 
-    # Iterate through directories
     echo "$recipes_json" | jq -r '.[] | select(.type == "dir") | .name' | while read -r name; do
-        # Fetch the description from package.json
         local description
         description=$(curl -s -f "$GITHUB_RAW/$PLATFORM/recipes/$name/package.json" | jq -r '.description // empty')
         if [[ -z "$description" ]]; then
@@ -136,8 +184,6 @@ function do_upgrade() {
         local current_exe=$(readlink -f "$0")
         chmod 755 "$tmp_file"
         
-        log "Moving new version to $current_exe..."
-        # Use 'cp' then 'rm' to handle cross-device move issues, and check for sudo
         if cp "$tmp_file" "$current_exe" 2>/dev/null; then
             rm -f "$tmp_file"
             log "Sovereign has been upgraded successfully!"
@@ -168,11 +214,12 @@ function usage() {
     echo "Commands:"
     echo "  setup            Interactive setup"
     echo "  list             List available recipes from GitHub"
-    echo "  install <pkg>    Install a recipe (e.g., immich, core/traefik)"
+    echo "  install <pkg>    Install a recipe (e.g., immich, traefik)"
+    echo "  uninstall <pkg>  Remove a recipe"
     echo "  upgrade          Update Sovereign CLI to the latest version"
     echo "  stats            System monitoring"
     echo "  ps               List active services"
-    echo "  down <pkg>       Stop a service"
+    echo "  down <pkg>       Stop a service (keep config)"
     echo "  logs <pkg>       View logs"
     echo ""
 }
@@ -184,6 +231,7 @@ case $1 in
     list)        do_list ;;
     upgrade)     do_upgrade ;;
     install|up)  do_install "$2" ;;
+    uninstall)   do_uninstall "$2" ;;
     stats)       do_stats ;;
     ps)          podman ps --filter "label=com.docker.compose.project" ;;
     down)
