@@ -1,11 +1,19 @@
 #!/bin/bash
 
-# sovereign - Autonomous Server Management CLI
+# sovereign - Autonomous Server Management CLI (GitHub backed)
 
-PROJECT_ROOT=$(dirname "$(readlink -f "$0")")
+# Configuration
+REPO_USER="your-github-user" # User should change this
+REPO_NAME="sovereign"
+REPO_BRANCH="master"
+GITHUB_RAW="https://raw.githubusercontent.com/$REPO_USER/$REPO_NAME/$REPO_BRANCH"
+
+WORK_DIR="$HOME/.sovereign"
+PODMAN_DIR="$WORK_DIR/podman"
+ENV_FILE="$WORK_DIR/.env"
 PLATFORM="podman"
-ENV_FILE="$PROJECT_ROOT/.env"
-DIST_FILE="$PROJECT_ROOT/.env.dist"
+
+mkdir -p "$PODMAN_DIR/core" "$PODMAN_DIR/recipes"
 
 # --- Utils ---
 
@@ -14,7 +22,27 @@ function error() { echo -e "\e[31m[error]\e[0m $1"; exit 1; }
 
 function check_env() {
     if [ ! -f "$ENV_FILE" ]; then
-        error "Configuration file (.env) not found. Please run './sovereign setup' first."
+        error "Configuration file (.env) not found. Please run 'sovereign setup' first."
+    fi
+}
+
+function fetch_remote_recipe() {
+    local pkg=$1 # e.g., core/traefik or recipes/immich
+    local target_dir="$WORK_DIR/$PLATFORM/$pkg"
+    
+    log "Fetching $pkg from GitHub..."
+    mkdir -p "$target_dir"
+    
+    curl -s -f "$GITHUB_RAW/$PLATFORM/$pkg/compose.yaml" -o "$target_dir/compose.yaml" || \
+    curl -s -f "$GITHUB_RAW/$PLATFORM/$pkg/compose.yml" -o "$target_dir/compose.yaml" || \
+    error "Failed to fetch recipe $pkg from $GITHUB_RAW"
+    
+    # Also fetch dynamic config if it's traefik
+    if [[ "$pkg" == "core/traefik" ]]; then
+        log "Fetching Traefik dynamic configuration..."
+        mkdir -p "$target_dir/traefik-dynamic"
+        # This is a bit simplified, ideally we'd list files
+        curl -s -f "$GITHUB_RAW/$PLATFORM/$pkg/traefik-dynamic/dashboard.yaml" -o "$target_dir/traefik-dynamic/dashboard.yaml"
     fi
 }
 
@@ -28,7 +56,12 @@ function do_setup() {
         [[ "$overwrite" != "y" ]] && exit 0
     fi
 
-    cp "$DIST_FILE" "$ENV_FILE"
+    # Fetch .env.dist from remote if not local
+    if [ ! -f "$WORK_DIR/.env.dist" ]; then
+        curl -s -f "$GITHUB_RAW/.env.dist" -o "$WORK_DIR/.env.dist" || error "Could not fetch .env.dist"
+    fi
+    
+    cp "$WORK_DIR/.env.dist" "$ENV_FILE"
 
     read -p "Enter your domain name (e.g., apps.example.com): " domain
     sed -i "s|DOMAIN_NAME=.*|DOMAIN_NAME=$domain|g" "$ENV_FILE"
@@ -36,58 +69,51 @@ function do_setup() {
     read -p "Enter your email for SSL (Let's Encrypt): " email
     sed -i "s|SSL_EMAIL=.*|SSL_EMAIL=$email|g" "$ENV_FILE"
 
-    read -p "Enter base data directory [/data]: " datadir
-    datadir=${datadir:-/data}
-    mkdir -p "$datadir"
-    # Note: For this script, we assume app-specific dirs are subdirs of this
-    # We can add more specific logic if needed
-    
-    log "Setup complete! Please edit $ENV_FILE for sensitive tokens (Cloudflare, SMTP)."
+    log "Setup complete! Please edit $ENV_FILE for sensitive tokens."
 }
 
 function do_install() {
     check_env
     local pkg=$1
-    [[ -z "$pkg" ]] && error "Usage: sovereign install <package_path> (e.g., core/traefik, apps/immich)"
+    [[ -z "$pkg" ]] && error "Usage: sovereign install <package> (e.g., core/traefik, recipes/immich)"
 
-    if [ -d "$PROJECT_ROOT/$PLATFORM/$pkg" ]; then
-        log "Installing $pkg..."
-        cd "$PROJECT_ROOT/$PLATFORM/$pkg" && podman compose --env-file "$ENV_FILE" up -d
-    else
-        error "Package $pkg not found in $PLATFORM/."
+    # If the path doesn't contain a slash, assume it's a recipe
+    if [[ "$pkg" != *"/"* ]]; then
+        pkg="recipes/$pkg"
     fi
+
+    # Always fetch/update from remote to ensure we have the latest recipe
+    fetch_remote_recipe "$pkg"
+
+    log "Installing $pkg..."
+    cd "$WORK_DIR/$PLATFORM/$pkg" && podman compose --env-file "$ENV_FILE" up -d
+}
+
+function do_list() {
+    log "Available recipes (from GitHub):"
+    # This requires the GitHub API or a simple index file. 
+    # For now, let's suggest the user checks the repo or we fetch a simple index if you create one.
+    echo "Check https://github.com/$REPO_USER/$REPO_NAME/tree/$REPO_BRANCH/$PLATFORM/recipes"
 }
 
 function do_stats() {
     log "Server Statistics:"
-    echo "--- Containers ---"
     podman ps --format "table {{.Names}}\t{{.Status}}\t{{.CPUPerc}}\t{{.MemUsage}}"
-    echo ""
-    echo "--- System Load ---"
-    uptime
-    echo ""
-    echo "--- Disk Usage (Data) ---"
-    df -h | grep "/data" || df -h /
-}
-
-function do_init_system() {
-    log "Installing sovereign to /usr/local/bin..."
-    sudo ln -sf "$PROJECT_ROOT/sovereign" /usr/local/bin/sovereign
-    log "You can now use 'sovereign' from anywhere."
 }
 
 function usage() {
+    echo "Sovereign CLI - GitHub Edition"
+    echo ""
     echo "Usage: sovereign [command] [args]"
     echo ""
     echo "Commands:"
-    echo "  setup            Interactive setup to create .env"
-    echo "  install <pkg>    Install a package (core/traefik, apps/immich...)"
-    echo "  stats            Show server and container statistics"
-    echo "  up <pkg>         Alias for install"
-    echo "  down <pkg>       Stop a package"
-    echo "  ps               List all Sovereign containers"
-    echo "  logs <pkg>       Show logs"
-    echo "  init-system      Link 'sovereign' to /usr/local/bin"
+    echo "  setup            Interactive setup"
+    echo "  list             List available recipes"
+    echo "  install <pkg>    Install a recipe (e.g., immich, core/traefik)"
+    echo "  stats            System monitoring"
+    echo "  ps               List active services"
+    echo "  down <pkg>       Stop a service"
+    echo "  logs <pkg>       View logs"
     echo ""
 }
 
@@ -95,17 +121,21 @@ function usage() {
 
 case $1 in
     setup)       do_setup ;;
+    list)        do_list ;;
     install|up)  do_install "$2" ;;
     stats)       do_stats ;;
-    init-system) do_init_system ;;
     ps)          podman ps --filter "label=com.docker.compose.project" ;;
     down)
         check_env
-        cd "$PROJECT_ROOT/$PLATFORM/$2" && podman compose --env-file "$ENV_FILE" down
+        pkg=$2
+        [[ "$pkg" != *"/"* ]] && pkg="recipes/$pkg"
+        cd "$WORK_DIR/$PLATFORM/$pkg" && podman compose --env-file "$ENV_FILE" down
         ;;
     logs)
         check_env
-        cd "$PROJECT_ROOT/$PLATFORM/$2" && podman compose --env-file "$ENV_FILE" logs -f
+        pkg=$2
+        [[ "$pkg" != *"/"* ]] && pkg="recipes/$pkg"
+        cd "$WORK_DIR/$PLATFORM/$pkg" && podman compose --env-file "$ENV_FILE" logs -f
         ;;
     *)
         usage
