@@ -27,6 +27,7 @@ Traefik runs at the system level (Rootful), while applications run in individual
 The `.env` file is located at `~/.sovereign/.env` (User) or `/etc/sovereign/.env` (System).
 
 - `DOMAIN_NAME`: Your base domain (e.g., `quatrain.dev`).
+- `BASE_STORAGE_PATH`: The root directory where all apps will store their persistent data.
 - `CF_DNS_API_TOKEN`: Cloudflare API token for wildcard SSL certificates.
 - `TRAEFIK_RESOLVER`: `dnsresolver` (Cloudflare) or `myresolver` (HTTP).
 - `TRAEFIK_AUTH`: Basic auth for the Traefik dashboard.

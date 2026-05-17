@@ -14,10 +14,12 @@ if [[ $EUID -eq 0 ]]; then
     WORK_DIR="/etc/sovereign"
     ENV_FILE="/etc/sovereign/.env"
     export PODMAN_SOCK="/run/podman/podman.sock"
+    DEFAULT_STORAGE="/var/lib/sovereign/data"
 else
     WORK_DIR="$HOME/.sovereign"
     ENV_FILE="$WORK_DIR/.env"
     export PODMAN_SOCK="/run/user/$UID/podman/podman.sock"
+    DEFAULT_STORAGE="$HOME/sovereign-data"
 fi
 
 PODMAN_DIR="$WORK_DIR/podman"
@@ -94,12 +96,30 @@ function fetch_remote_recipe() {
 
 function check_required_config() {
     local pkg_dir=$1
+    local app_name=$(basename "$pkg_dir")
+    local base_storage=$(grep "^BASE_STORAGE_PATH=" "$ENV_FILE" | cut -d'=' -f2)
+
     if [ -f "$pkg_dir/package.json" ]; then
         local required=$(jq -r '.requiredEnv[]?' "$pkg_dir/package.json")
         for var in $required; do
             if ! grep -q "^$var=" "$ENV_FILE"; then
+                local default_val=""
+                # Suggest path if variable looks like a location
+                if [[ "$var" == *"LOCATION"* ]] || [[ "$var" == *"PATH"* ]] || [[ "$var" == *"DIR"* ]]; then
+                    local sub_path=$(echo "$var" | tr '[:upper:]' '[:lower:]' | sed 's/_location//;s/_path//;s/_dir//')
+                    default_val="$base_storage/$app_name/$sub_path"
+                fi
+
                 log "Missing required configuration: $var"
-                read -p "Enter value for $var: " value
+                read -p "Enter value for $var [default: $default_val]: " value
+                value=${value:-$default_val}
+                
+                # Create directory if it looks like a path
+                if [[ "$value" == /* ]]; then
+                    mkdir -p "$value"
+                    log "Created directory: $value"
+                fi
+
                 echo "$var=$value" >> "$ENV_FILE"
                 log "Added $var to $ENV_FILE"
             fi
@@ -134,6 +154,11 @@ function do_setup() {
     read -p "Enter your email for SSL (Let's Encrypt): " email
     sed -i "s|SSL_EMAIL=.*|SSL_EMAIL=$email|g" "$ENV_FILE"
 
+    read -p "Enter base storage path for all apps [default: $DEFAULT_STORAGE]: " base_storage
+    base_storage=${base_storage:-$DEFAULT_STORAGE}
+    mkdir -p "$base_storage"
+    sed -i "s|BASE_STORAGE_PATH=.*|BASE_STORAGE_PATH=$base_storage|g" "$ENV_FILE"
+
     log "Setup complete! Configuration stored in $ENV_FILE"
 }
 
@@ -162,9 +187,20 @@ function do_install() {
 
     fetch_remote_recipe "$pkg"
     local target_dir="$WORK_DIR/$PLATFORM/$pkg"
+    local app_name=$(basename "$pkg")
 
+    # Handle storage directory creation
+    local base_storage=$(grep "^BASE_STORAGE_PATH=" "$ENV_FILE" | cut -d'=' -f2)
+    if [[ "$is_core" == "false" ]] && [[ -n "$base_storage" ]]; then
+        local app_storage="$base_storage/$app_name"
+        if [ ! -d "$app_storage" ]; then
+            log "Creating storage directory: $app_storage"
+            mkdir -p "$app_storage"
+        fi
+    fi
+
+    # For non-core recipes, handle custom subdomain
     if [[ "$is_core" == "false" ]]; then
-        local app_name=$(basename "$pkg")
         get_app_subdomain "$app_name" > /dev/null
     fi
 
