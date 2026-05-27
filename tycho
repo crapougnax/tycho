@@ -74,23 +74,137 @@ function get_app_subdomain() {
     echo "$subdomain"
 }
 
-function fetch_remote_recipe() {
-    local pkg=$1 # e.g., core/traefik or recipes/immich
-    local target_dir="$WORK_DIR/$PLATFORM/$pkg"
-    
-    log "Fetching $pkg from GitHub..."
-    mkdir -p "$target_dir"
-    
-    curl -s -f "$GITHUB_RAW/$PLATFORM/$pkg/compose.yaml" -o "$target_dir/compose.yaml" || \
-    curl -s -f "$GITHUB_RAW/$PLATFORM/$pkg/compose.yml" -o "$target_dir/compose.yaml" || \
-    error "Failed to fetch recipe $pkg from $GITHUB_RAW"
-    
-    curl -s -f "$GITHUB_RAW/$PLATFORM/$pkg/package.json" -o "$target_dir/package.json" 2>/dev/null
+function resolve_local_pkg_dir() {
+    local pkg=$1
+    [[ -z "$pkg" ]] && return 1
 
-    if [[ "$pkg" == "core/traefik" ]]; then
-        log "Fetching Traefik dynamic configuration..."
-        mkdir -p "$target_dir/traefik-dynamic"
-        curl -s -f "$GITHUB_RAW/$PLATFORM/$pkg/traefik-dynamic/dashboard.yaml" -o "$target_dir/traefik-dynamic/dashboard.yaml"
+    if [[ "$pkg" == "core/"* ]]; then
+        echo "$WORK_DIR/$PLATFORM/$pkg"
+        return 0
+    fi
+
+    if [[ "$pkg" == "recipes/"* ]]; then
+        echo "$WORK_DIR/$PLATFORM/$pkg"
+        return 0
+    fi
+
+    if [ -d "$WORK_DIR/$PLATFORM/recipes/$pkg" ]; then
+        echo "$WORK_DIR/$PLATFORM/recipes/$pkg"
+        return 0
+    fi
+
+    if [[ "$pkg" == "traefik" ]] || [[ "$pkg" == "smtp" ]]; then
+        echo "$WORK_DIR/$PLATFORM/core/$pkg"
+        return 0
+    fi
+
+    if [ -f "$WORK_DIR/repositories.json" ]; then
+        local repos=$(jq -r '.[].name' "$WORK_DIR/repositories.json" 2>/dev/null)
+        for r in $repos; do
+            if [ -d "$WORK_DIR/$PLATFORM/recipes/$r/$pkg" ]; then
+                echo "$WORK_DIR/$PLATFORM/recipes/$r/$pkg"
+                return 0
+            fi
+        done
+    fi
+
+    echo "$WORK_DIR/$PLATFORM/recipes/$pkg"
+    return 0
+}
+
+function find_recipe_repo() {
+    local search_pkg=$1
+    local r_name=""
+    local recipe_name=""
+
+    if [[ "$search_pkg" == *"/"* ]]; then
+        r_name="${search_pkg%%/*}"
+        recipe_name="${search_pkg#*/}"
+    else
+        recipe_name="$search_pkg"
+    fi
+
+    if [[ -n "$r_name" ]]; then
+        if [[ "$r_name" == "official" ]]; then
+            if curl -s -f -I "https://raw.githubusercontent.com/$REPO_USER/$REPO_NAME/$REPO_BRANCH/.tycho/recipes/$PLATFORM/$recipe_name/package.json" &>/dev/null || \
+               curl -s -f -I "https://raw.githubusercontent.com/$REPO_USER/$REPO_NAME/$REPO_BRANCH/.tycho/recipes/$PLATFORM/$recipe_name/compose.yaml" &>/dev/null; then
+                echo "official;$REPO_USER;$REPO_NAME;$REPO_BRANCH;$recipe_name"
+                return 0
+            fi
+        elif [ -f "$WORK_DIR/repositories.json" ]; then
+            local repo_json=$(jq -c ".[] | select(.name == \"$r_name\")" "$WORK_DIR/repositories.json" 2>/dev/null)
+            if [[ -n "$repo_json" ]]; then
+                local r_owner=$(echo "$repo_json" | jq -r '.owner')
+                local r_repo=$(echo "$repo_json" | jq -r '.repo')
+                local r_branch=$(echo "$repo_json" | jq -r '.branch')
+                if curl -s -f -I "https://raw.githubusercontent.com/$r_owner/$r_repo/$r_branch/.tycho/recipes/$PLATFORM/$recipe_name/package.json" &>/dev/null || \
+                   curl -s -f -I "https://raw.githubusercontent.com/$r_owner/$r_repo/$r_branch/.tycho/recipes/$PLATFORM/$recipe_name/compose.yaml" &>/dev/null; then
+                    echo "$r_name;$r_owner;$r_repo;$r_branch;$recipe_name"
+                    return 0
+                fi
+            fi
+        fi
+        return 1
+    fi
+
+    if curl -s -f -I "https://raw.githubusercontent.com/$REPO_USER/$REPO_NAME/$REPO_BRANCH/.tycho/recipes/$PLATFORM/$recipe_name/package.json" &>/dev/null || \
+       curl -s -f -I "https://raw.githubusercontent.com/$REPO_USER/$REPO_NAME/$REPO_BRANCH/.tycho/recipes/$PLATFORM/$recipe_name/compose.yaml" &>/dev/null; then
+        echo "official;$REPO_USER;$REPO_NAME;$REPO_BRANCH;$recipe_name"
+        return 0
+    fi
+
+    if [ -f "$WORK_DIR/repositories.json" ]; then
+        local repos=$(jq -c '.[]' "$WORK_DIR/repositories.json" 2>/dev/null)
+        if [[ -n "$repos" ]]; then
+            while read -r repo_json; do
+                local r_name=$(echo "$repo_json" | jq -r '.name')
+                local r_owner=$(echo "$repo_json" | jq -r '.owner')
+                local r_repo=$(echo "$repo_json" | jq -r '.repo')
+                local r_branch=$(echo "$repo_json" | jq -r '.branch')
+                if curl -s -f -I "https://raw.githubusercontent.com/$r_owner/$r_repo/$r_branch/.tycho/recipes/$PLATFORM/$recipe_name/package.json" &>/dev/null || \
+                   curl -s -f -I "https://raw.githubusercontent.com/$r_owner/$r_repo/$r_branch/.tycho/recipes/$PLATFORM/$recipe_name/compose.yaml" &>/dev/null; then
+                    echo "$r_name;$r_owner;$r_repo;$r_branch;$recipe_name"
+                    return 0
+                fi
+            done <<< "$repos"
+        fi
+    fi
+
+    return 1
+}
+
+function fetch_remote_recipe() {
+    local pkg=$1
+    local r_name=$2
+    local r_owner=$3
+    local r_repo=$4
+    local r_branch=$5
+    local recipe_name=$6
+    local is_core=$7
+
+    local target_dir="$WORK_DIR/$PLATFORM/$pkg"
+    local raw_url="https://raw.githubusercontent.com/$r_owner/$r_repo/$r_branch"
+
+    if [[ "$is_core" == "true" ]]; then
+        log "Fetching core service $recipe_name from official repository..."
+        mkdir -p "$target_dir"
+        curl -s -f "$raw_url/.tycho/core/$PLATFORM/$recipe_name/compose.yaml" -o "$target_dir/compose.yaml" || \
+        curl -s -f "$raw_url/.tycho/core/$PLATFORM/$recipe_name/compose.yml" -o "$target_dir/compose.yaml" || \
+        error "Failed to fetch core service $recipe_name from $raw_url"
+
+        if [[ "$recipe_name" == "traefik" ]]; then
+            log "Fetching Traefik dynamic configuration..."
+            mkdir -p "$target_dir/traefik-dynamic"
+            curl -s -f "$raw_url/.tycho/core/$PLATFORM/$recipe_name/traefik-dynamic/dashboard.yaml" -o "$target_dir/traefik-dynamic/dashboard.yaml"
+        fi
+    else
+        log "Fetching recipe $recipe_name from repository '$r_name' ($r_owner/$r_repo)..."
+        mkdir -p "$target_dir"
+        curl -s -f "$raw_url/.tycho/recipes/$PLATFORM/$recipe_name/compose.yaml" -o "$target_dir/compose.yaml" || \
+        curl -s -f "$raw_url/.tycho/recipes/$PLATFORM/$recipe_name/compose.yml" -o "$target_dir/compose.yaml" || \
+        error "Failed to fetch recipe $recipe_name from $raw_url"
+
+        curl -s -f "$raw_url/.tycho/recipes/$PLATFORM/$recipe_name/package.json" -o "$target_dir/package.json" 2>/dev/null
     fi
 }
 
@@ -176,15 +290,34 @@ function do_setup() {
 function do_install() {
     check_env
     local pkg=$1
-    [[ -z "$pkg" ]] && error "Usage: tycho install <package>"
+    [[ -z "$pkg" ]] && error "Usage: tycho install [repo/]package"
 
     local is_core=false
+    local app_name=""
+    local r_name="official"
+    local r_owner="$REPO_USER"
+    local r_repo="$REPO_NAME"
+    local r_branch="$REPO_BRANCH"
+
     if [[ "$pkg" == "core/"* ]] || [[ "$pkg" == "traefik" ]] || [[ "$pkg" == "smtp" ]]; then
         is_core=true
         [[ "$pkg" == "traefik" ]] && pkg="core/traefik"
         [[ "$pkg" == "smtp" ]] && pkg="core/smtp"
+        app_name=$(basename "$pkg")
     else
-        [[ "$pkg" != "recipes/"* ]] && pkg="recipes/$pkg"
+        local search_pkg="${pkg#recipes/}"
+        local match_info=$(find_recipe_repo "$search_pkg")
+        if [[ $? -ne 0 ]] || [[ -z "$match_info" ]]; then
+            error "Recipe '$search_pkg' not found in any registered repository."
+        fi
+
+        IFS=';' read -r r_name r_owner r_repo r_branch app_name <<< "$match_info"
+
+        if [[ "$r_name" == "official" ]]; then
+            pkg="recipes/$app_name"
+        else
+            pkg="recipes/$r_name/$app_name"
+        fi
     fi
 
     if [[ $EUID -eq 0 ]] && [[ "$is_core" == "false" ]]; then
@@ -196,9 +329,8 @@ function do_install() {
     read -p "Are you sure you want to install/update $pkg? (y/N): " confirm
     [[ "$confirm" != "y" ]] && exit 0
 
-    fetch_remote_recipe "$pkg"
+    fetch_remote_recipe "$pkg" "$r_name" "$r_owner" "$r_repo" "$r_branch" "$app_name" "$is_core"
     local target_dir="$WORK_DIR/$PLATFORM/$pkg"
-    local app_name=$(basename "$pkg")
 
     # Handle storage directory creation
     local base_storage=$(grep "^BASE_STORAGE_PATH=" "$ENV_FILE" | cut -d'=' -f2)
@@ -260,11 +392,7 @@ function do_uninstall() {
     local pkg=$1
     [[ -z "$pkg" ]] && error "Usage: tycho uninstall <package>"
 
-    if [[ "$pkg" != *"/"* ]]; then
-        pkg="recipes/$pkg"
-    fi
-
-    local target_dir="$WORK_DIR/$PLATFORM/$pkg"
+    local target_dir=$(resolve_local_pkg_dir "$pkg")
     if [ ! -d "$target_dir" ]; then
         error "Package $pkg is not installed locally."
     fi
@@ -279,7 +407,7 @@ function do_uninstall() {
     
     cd "$target_dir" && podman compose --env-file "$ENV_FILE" down $down_args
     
-    if [[ "$pkg" == "core/traefik" ]] && [[ $EUID -eq 0 ]]; then
+    if [[ "$pkg" == "traefik" ]] || [[ "$pkg" == "core/traefik" ]] && [[ $EUID -eq 0 ]]; then
         sudo systemctl disable --now tycho-traefik.service 2>/dev/null
         sudo rm -f /etc/systemd/system/tycho-traefik.service
         sudo systemctl daemon-reload
@@ -291,19 +419,381 @@ function do_uninstall() {
     log "$pkg has been uninstalled."
 }
 
-function do_list() {
-    log "Fetching recipes from GitHub..."
-    local recipes_json=$(curl -s -f "$GITHUB_API/contents/$PLATFORM/recipes?ref=$REPO_BRANCH")
-    [[ $? -ne 0 ]] && error "Failed to reach GitHub API."
+function fetch_and_list_recipes() {
+    local r_name=$1
+    local r_owner=$2
+    local r_repo=$3
+    local r_branch=$4
 
-    echo ""
-    printf "\e[1m%-20s %s\e[0m\n" "RECIPE" "DESCRIPTION"
-    echo "------------------------------------------------------------"
+    local api_url="https://api.github.com/repos/$r_owner/$r_repo"
+    local raw_url="https://raw.githubusercontent.com/$r_owner/$r_repo/$r_branch"
+
+    local recipes_json=$(curl -s -f "$api_url/contents/.tycho/recipes/$PLATFORM?ref=$r_branch")
+    if [[ $? -ne 0 ]]; then
+        log "\e[33mWarning: Failed to reach GitHub API for repository '$r_name' ($r_owner/$r_repo).\e[0m"
+        return
+    fi
+
     echo "$recipes_json" | jq -r '.[] | select(.type == "dir") | .name' | while read -r name; do
-        local description=$(curl -s -f "$GITHUB_RAW/$PLATFORM/recipes/$name/package.json" | jq -r '.description // empty')
-        printf "%-20s %s\n" "$name" "${description:-(No description)}"
+        local description=$(curl -s -f "$raw_url/.tycho/recipes/$PLATFORM/$name/package.json" | jq -r '.description // empty')
+        printf "%-25s %-15s %s\n" "$name" "$r_name" "${description:-(No description)}"
     done
+}
+
+function do_list() {
     echo ""
+    printf "\e[1m%-25s %-15s %s\e[0m\n" "RECIPE" "REPOSITORY" "DESCRIPTION"
+    echo "--------------------------------------------------------------------------------"
+
+    # 1. Official Repository
+    fetch_and_list_recipes "official" "$REPO_USER" "$REPO_NAME" "$REPO_BRANCH"
+
+    # 2. Third-party Repositories
+    if [ -f "$WORK_DIR/repositories.json" ]; then
+        local repos=$(jq -c '.[]' "$WORK_DIR/repositories.json" 2>/dev/null)
+        if [[ -n "$repos" ]]; then
+            while read -r repo_json; do
+                local r_name=$(echo "$repo_json" | jq -r '.name')
+                local r_owner=$(echo "$repo_json" | jq -r '.owner')
+                local r_repo=$(echo "$repo_json" | jq -r '.repo')
+                local r_branch=$(echo "$repo_json" | jq -r '.branch')
+                fetch_and_list_recipes "$r_name" "$r_owner" "$r_repo" "$r_branch"
+            done <<< "$repos"
+        fi
+    fi
+    echo ""
+}
+
+function resolve_latest_matching_tag() {
+    local owner=$1
+    local repo=$2
+    local tag=$3
+
+    if [[ "$tag" =~ ^v?[0-9]+$ ]] || [[ "$tag" =~ ^v?[0-9]+\.[0-9]+$ ]] || [[ "$tag" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        local tags_json=$(curl -s -f "https://api.github.com/repos/$owner/$repo/tags")
+        if [[ $? -eq 0 ]] && [[ -n "$tags_json" ]] && [[ "$tags_json" != "[]" ]]; then
+            local tag_names=$(echo "$tags_json" | jq -r '.[].name' 2>/dev/null)
+            if [[ -n "$tag_names" ]]; then
+                local search_prefix="${tag#v}"
+                local matched_tags=""
+                while read -r name; do
+                    local clean_name="${name#v}"
+                    if [[ "$clean_name" == "$search_prefix" ]] || [[ "$clean_name" == "$search_prefix."* ]]; then
+                        matched_tags="$matched_tags$name"$'\n'
+                    fi
+                done <<< "$tag_names"
+                
+                if [[ -n "$matched_tags" ]]; then
+                    local resolved_tag=$(echo "$matched_tags" | grep -v '^$' | sort -V | tail -n 1)
+                    if [[ -n "$resolved_tag" ]]; then
+                        echo "$resolved_tag"
+                        return 0
+                    fi
+                fi
+            fi
+        fi
+    fi
+
+    echo "$tag"
+    return 0
+}
+
+function select_repository_tag() {
+    local owner=$1
+    local repo=$2
+    local fallback_branch="main"
+
+    local tags_json=$(curl -s -f "https://api.github.com/repos/$owner/$repo/tags")
+    if [[ $? -ne 0 ]] || [[ -z "$tags_json" ]] || [[ "$tags_json" == "[]" ]]; then
+        echo "$fallback_branch;false"
+        return 0
+    fi
+
+    local jq_filter='
+      map(select(.name | test("^v?[0-9]+(\\.[0-9]+)*")))
+      | map(
+          .name as $name
+          | ($name | sub("^v"; "")) as $clean
+          | ($clean | split(".")) as $parts
+          | {
+              name: $name,
+              clean: $clean,
+              major: ($parts[0] // "0"),
+              minor: ($parts[1] // "0"),
+              patch: ($parts[2] // "0"),
+              has_v: ($name | startswith("v"))
+            }
+        )
+      | map(. + {
+          major_num: (.major | tonumber? // 0),
+          minor_num: (.minor | tonumber? // 0),
+          patch_num: (.patch | tonumber? // 0)
+        })
+      | sort_by(.major_num, .minor_num, .patch_num)
+      | reverse
+      | . as $all
+      | ($all | limit(3; .)) as $recent
+      | ($all | group_by(.major_num) | map(reverse | .[0]) | reverse) as $majors
+      | ($all | group_by([.major_num, .minor_num]) | map(reverse | .[0]) | reverse) as $minors
+      | [
+          ($recent[] | {
+            label: ("Pin to specific release tag: " + .name),
+            value: .name
+          }),
+          ($majors[] | {
+            label: ("Track major version: " + (if .has_v then "v" else "" end) + .major + " (resolves to: " + .name + ")"),
+            value: ((if .has_v then "v" else "" end) + .major)
+          }),
+          ($minors[] | {
+            label: ("Track minor version: " + (if .has_v then "v" else "" end) + .major + "." + .minor + " (resolves to: " + .name + ")"),
+            value: ((if .has_v then "v" else "" end) + .major + "." + .minor)
+          })
+        ]
+      | unique_by(.value)
+      | .[] | "\(.label);\(.value)"
+    '
+
+    local resolved_options=$(echo "$tags_json" | jq -r "$jq_filter" 2>/dev/null)
+    if [[ -z "$resolved_options" ]]; then
+        echo "$fallback_branch;false"
+        return 0
+    fi
+
+    echo -e "\n\e[1mSelect a version tag/branch for '$owner/$repo':\e[0m" >&2
+    
+    local -a menu_labels
+    local -a menu_values
+    local idx=1
+
+    while read -r line; do
+        if [[ -n "$line" ]]; then
+            local label="${line%%;*}"
+            local value="${line#*;}"
+            menu_labels+=("$label")
+            menu_values+=("$value")
+            echo -e "  ${idx}) $label" >&2
+            idx=$((idx+1))
+        fi
+    done <<< "$resolved_options"
+
+    menu_labels+=("Default to main (development/unstable branch)")
+    menu_values+=("main")
+    echo -e "  ${idx}) Default to main (development/unstable branch)" >&2
+
+    local max_choice=${#menu_labels[@]}
+    while true; do
+        read -p "Enter choice [1-${max_choice}, default: 1]: " choice >&2
+        choice=${choice:-1}
+        
+        if [[ "$choice" -ge 1 ]] && [[ "$choice" -le "$max_choice" ]]; then
+            local selected_idx=$((choice-1))
+            local selected_val="${menu_values[selected_idx]}"
+            local final_has_tag="true"
+            if [[ "$selected_val" == "main" ]]; then
+                final_has_tag="false"
+            fi
+            echo "${selected_val};${final_has_tag}"
+            return 0
+        else
+            echo "Invalid selection. Please choose a number between 1 and ${max_choice}." >&2
+        fi
+    done
+}
+
+function do_repo() {
+    local cmd=$1
+    case "$cmd" in
+        add)
+            local name=$2
+            local source=$3
+            [[ -z "$name" ]] || [[ -z "$source" ]] && error "Usage: tycho repo add <name> <owner>/<repo>[@branch]"
+            
+            if [[ ! "$name" =~ ^[a-zA-Z0-9-]+$ ]]; then
+                error "Invalid repository name. Use only letters, numbers, and hyphens."
+            fi
+            
+            if [[ "$name" == "official" ]] || [[ "$name" == "core" ]] || [[ "$name" == "recipes" ]]; then
+                error "Repository name '$name' is reserved."
+            fi
+
+            local owner=""
+            local repo=""
+            local branch="main"
+            local has_tag=true
+            
+            if [[ "$source" != *"@"* ]]; then
+                has_tag=false
+            fi
+            
+            if [[ "$source" == *"@"* ]]; then
+                local tmp_src="${source%%@*}"
+                branch="${source#*@}"
+                source="$tmp_src"
+            fi
+            
+            if [[ "$source" != *"/"* ]]; then
+                error "Invalid repository source. Must be in the format 'owner/repo' or 'owner/repo@branch'."
+            fi
+            
+            owner="${source%%/*}"
+            repo="${source#*/}"
+            
+            if [[ "$has_tag" == "false" ]]; then
+                log "Fetching available release tags for $owner/$repo..."
+                local select_res=$(select_repository_tag "$owner" "$repo")
+                IFS=';' read -r branch has_tag <<< "$select_res"
+            fi
+            
+            if [[ "$has_tag" == "true" ]]; then
+                log "Resolving tag/branch '$branch' for $owner/$repo..."
+                local resolved=$(resolve_latest_matching_tag "$owner" "$repo" "$branch")
+                if [[ "$resolved" != "$branch" ]]; then
+                    log "Resolved short tag '$branch' to latest matching release '$resolved'."
+                    branch="$resolved"
+                fi
+            fi
+            
+            # Fetch repository metadata description from .tycho/repository.json
+            local r_desc=""
+            local meta_json=$(curl -s -f "https://raw.githubusercontent.com/$owner/$repo/$branch/.tycho/repository.json")
+            if [[ $? -eq 0 ]] && [[ -n "$meta_json" ]]; then
+                r_desc=$(echo "$meta_json" | jq -r '.description // empty')
+                local meta_name=$(echo "$meta_json" | jq -r '.name')
+                log "Found repository metadata: '$meta_name' - $r_desc"
+            fi
+
+            if [ ! -f "$WORK_DIR/repositories.json" ]; then
+                echo "[]" > "$WORK_DIR/repositories.json"
+            fi
+            
+            local exists=$(jq -r ".[] | select(.name == \"$name\") | .name" "$WORK_DIR/repositories.json" 2>/dev/null)
+            if [[ -n "$exists" ]]; then
+                read -p "Repository '$name' already exists. Overwrite? (y/N): " overwrite
+                [[ "$overwrite" != "y" ]] && exit 0
+                local tmp_file=$(mktemp)
+                jq "del(.[] | select(.name == \"$name\"))" "$WORK_DIR/repositories.json" > "$tmp_file"
+                mv "$tmp_file" "$WORK_DIR/repositories.json"
+            fi
+            
+            local tmp_file=$(mktemp)
+            jq ". += [{\"name\": \"$name\", \"owner\": \"$owner\", \"repo\": \"$repo\", \"branch\": \"$branch\", \"description\": \"$r_desc\"}]" "$WORK_DIR/repositories.json" > "$tmp_file"
+            mv "$tmp_file" "$WORK_DIR/repositories.json"
+            
+            if [[ "$has_tag" == "false" ]]; then
+                log "\e[33mWarning: No branch/tag specified. Defaulting to 'main'. This is not recommended for production security.\e[0m"
+            fi
+            log "Added repository '$name' ($owner/$repo@$branch)."
+            ;;
+            
+        list)
+            echo ""
+            printf "\e[1m%-15s %-30s %-10s %s\e[0m\n" "NAME" "URL/SOURCE" "BRANCH" "DESCRIPTION"
+            echo "----------------------------------------------------------------------------------------------------"
+            printf "%-15s %-30s %-10s %s\n" "official" "$REPO_USER/$REPO_NAME" "$REPO_BRANCH" "Official Tycho core services and application recipes repository"
+            
+            if [ -f "$WORK_DIR/repositories.json" ]; then
+                jq -c '.[]' "$WORK_DIR/repositories.json" 2>/dev/null | while read -r repo_json; do
+                    if [[ -n "$repo_json" ]]; then
+                        local r_name=$(echo "$repo_json" | jq -r '.name')
+                        local r_owner=$(echo "$repo_json" | jq -r '.owner')
+                        local r_repo=$(echo "$repo_json" | jq -r '.repo')
+                        local r_branch=$(echo "$repo_json" | jq -r '.branch')
+                        local r_desc=$(echo "$repo_json" | jq -r '.description // empty')
+                        printf "%-15s %-30s %-10s %s\n" "$r_name" "$r_owner/$r_repo" "$r_branch" "${r_desc:-(No description)}"
+                    fi
+                done
+            fi
+            echo ""
+            ;;
+            
+        remove)
+            local name=$2
+            [[ -z "$name" ]] && error "Usage: tycho repo remove <name>"
+            
+            if [ ! -f "$WORK_DIR/repositories.json" ]; then
+                error "No repositories configured."
+            fi
+            
+            local exists=$(jq -r ".[] | select(.name == \"$name\") | .name" "$WORK_DIR/repositories.json" 2>/dev/null)
+            if [[ -z "$exists" ]]; then
+                error "Repository '$name' not found."
+            fi
+            
+            local tmp_file=$(mktemp)
+            jq "del(.[] | select(.name == \"$name\"))" "$WORK_DIR/repositories.json" > "$tmp_file"
+            mv "$tmp_file" "$WORK_DIR/repositories.json"
+            
+            log "Removed repository '$name'."
+            ;;
+            
+        update)
+            log "Updating recipe repositories..."
+            log "Checking repository 'official' ($REPO_USER/$REPO_NAME@$REPO_BRANCH)..."
+            if curl -s -f -I "https://api.github.com/repos/$REPO_USER/$REPO_NAME" &>/dev/null; then
+                log "  \e[32m[OK]\e[0m official repository is online"
+            else
+                log "  \e[31m[FAILED]\e[0m official repository is offline or invalid"
+            fi
+            
+            if [ -f "$WORK_DIR/repositories.json" ]; then
+                local repos=$(jq -c '.[]' "$WORK_DIR/repositories.json" 2>/dev/null)
+                if [[ -n "$repos" ]]; then
+                    while read -r repo_json; do
+                        local r_name=$(echo "$repo_json" | jq -r '.name')
+                        local r_owner=$(echo "$repo_json" | jq -r '.owner')
+                        local r_repo=$(echo "$repo_json" | jq -r '.repo')
+                        local r_branch=$(echo "$repo_json" | jq -r '.branch')
+                        
+                        log "Checking repository '$r_name' ($r_owner/$r_repo@$r_branch)..."
+                        if curl -s -f -I "https://api.github.com/repos/$r_owner/$r_repo" &>/dev/null; then
+                            log "  \e[32m[OK]\e[0m $r_name is online"
+                        else
+                            log "  \e[31m[FAILED]\e[0m $r_name is offline or invalid"
+                        fi
+                    done <<< "$repos"
+                fi
+            fi
+            log "Update check complete!"
+            ;;
+
+        boilerplate)
+            local target_folder=$2
+            [[ -z "$target_folder" ]] && target_folder="."
+            
+            log "Preparing Tycho repository boilerplate inside '$target_folder'..."
+            mkdir -p "$target_folder/.tycho/core/podman" "$target_folder/.tycho/recipes/podman"
+            
+            local repo_name=$(basename "$(cd "$target_folder" && pwd)")
+            read -p "Enter repository name [default: $repo_name]: " r_name
+            r_name=${r_name:-$repo_name}
+            
+            read -p "Enter repository description [default: Custom Tycho recipe repository]: " r_desc
+            r_desc=${r_desc:-"Custom Tycho recipe repository"}
+            
+            read -p "Enter author/vendor [default: $(whoami)]: " r_author
+            r_author=${r_author:-$(whoami)}
+            
+            cat <<EOF > "$target_folder/.tycho/repository.json"
+{
+  "name": "$r_name",
+  "description": "$r_desc",
+  "author": "$r_author",
+  "version": "1.0.0"
+}
+EOF
+            log "Successfully prepared Tycho boilerplate in $target_folder/.tycho/"
+            ;;
+            
+        *)
+            echo "Usage:"
+            echo "  tycho repo add <name> <owner>/<repo>[@branch]   Add a recipe repository"
+            echo "  tycho repo list                                 List added repositories"
+            echo "  tycho repo remove <name>                        Remove a repository"
+            echo "  tycho repo update                               Verify all repositories"
+            echo "  tycho repo boilerplate <folder>                 Create a new repository template"
+            echo ""
+            ;;
+    esac
 }
 
 function do_stats() {
@@ -337,6 +827,7 @@ function usage() {
     echo "  list             List available recipes"
     echo "  install <pkg>    Install a recipe or core service"
     echo "  uninstall <pkg>  Remove a service"
+    echo "  repo <cmd>       Manage recipe repositories (add, list, remove, update)"
     echo "  upgrade          Update this CLI"
     echo "  stats            Monitor containers"
     echo "  ps               List active services"
@@ -349,9 +840,24 @@ case $1 in
     upgrade)     do_upgrade ;;
     install|up)  do_install "$2" ;;
     uninstall)   do_uninstall "$2" ;;
+    repo)        do_repo "$2" "$3" "$4" ;;
     stats)       do_stats ;;
     ps)          podman ps --filter "label=com.docker.compose.project" ;;
-    down)        check_env; cd "$WORK_DIR/$PLATFORM/$2" && podman compose --env-file "$ENV_FILE" down ;;
-    logs)        check_env; cd "$WORK_DIR/$PLATFORM/$2" && podman compose --env-file "$ENV_FILE" logs -f ;;
+    down)
+        check_env
+        local target_dir=$(resolve_local_pkg_dir "$2")
+        if [ ! -d "$target_dir" ]; then
+            error "Package $2 is not installed locally."
+        fi
+        cd "$target_dir" && podman compose --env-file "$ENV_FILE" down
+        ;;
+    logs)
+        check_env
+        local target_dir=$(resolve_local_pkg_dir "$2")
+        if [ ! -d "$target_dir" ]; then
+            error "Package $2 is not installed locally."
+        fi
+        cd "$target_dir" && podman compose --env-file "$ENV_FILE" logs -f
+        ;;
     *)           usage ;;
 esac

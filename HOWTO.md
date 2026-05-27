@@ -32,18 +32,104 @@ The `.env` file is located at `~/.tycho/.env` (User) or `/etc/tycho/.env` (Syste
 - `TRAEFIK_RESOLVER`: `dnsresolver` (Cloudflare) or `myresolver` (HTTP).
 - `TRAEFIK_AUTH`: Basic auth for the Traefik dashboard.
 
-## 3. Managing Recipes
+## 3. Managing Repositories (User Guide)
 
-Recipes are stored in the `podman/recipes/` directory on GitHub.
+Tycho supports third-party recipe repositories similar to Helm. This allows you to add repositories hosted by the community or within your organization.
 
-### Adding a new Recipe
-1. Create a directory in `podman/recipes/` on GitHub.
-2. Add a `package.json` with a `description` and `requiredEnv` list.
-3. Add a `compose.yaml` file.
-4. Commit and push.
+### Managing Repositories
+- **Add a repository**:
+  ```bash
+  tycho repo add <name> <owner>/<repo>[@branch-or-tag]
+  ```
+  > [!TIP]
+  > **Semantic Tag Resolution**: You can specify short version tags (e.g. `v1` or `v1.0`). Tycho will automatically query the GitHub API, resolve it to the latest matching full release tag (like `v1.0.4` or `v1.2.3`), and pin your configuration to that stable release.
+  
+  > [!WARNING]
+  > **Security Warning**: Adding a repository without specifying a tag (e.g. `tycho repo add myrepo owner/repo`) is allowed and will default to the `main` branch. However, Tycho will print a security warning as this is not recommended for production stability.
 
-### Updating a Recipe
-Run `tycho install <recipe-name>` again. Tycho will fetch the latest version and recreate the containers.
+- **List repositories**:
+  ```bash
+  tycho repo list
+  ```
+  Lists all added repositories alongside the default `official` one.
+
+- **Verify repository status**:
+  ```bash
+  tycho repo update
+  ```
+  Loops through all configured repositories and verifies their online connectivity status.
+
+- **Remove a repository**:
+  ```bash
+  tycho repo remove <name>
+  ```
+
+### Listing & Installing Third-Party Recipes
+- **List recipes**: `tycho list` dynamically queries all registered repositories and presents a unified table:
+  ```
+  RECIPE                   REPOSITORY      DESCRIPTION
+  --------------------------------------------------------------------------------
+  nextcloud                official        Enterprise-grade sharing and collaboration platform
+  quatrain-studio          coreapps        Visual data modeling and developer dashboard
+  ```
+- **Install a recipe**:
+  - To install a recipe from any repository (searched automatically):
+    ```bash
+    tycho install quatrain-studio
+    ```
+  - To target a specific repository explicitly and avoid name collisions:
+    ```bash
+    tycho install coreapps/quatrain-studio
+    ```
+
+---
+
+## 4. Being a Recipe Provider (Provider Guide)
+
+If you are a developer or team lead, you can easily host your own Tycho recipe repository on GitHub to share custom services with your users.
+
+### Repository Structure
+Any GitHub repository can act as a Tycho recipe repository as long as it contains the designated `.tycho` root directory:
+```
+<your-repository-root>/
+└── .tycho/
+    ├── core/
+    │   └── podman/                 # Core services (e.g., custom gateways)
+    └── recipes/
+        └── podman/                 # Platform recipes (e.g. podman, k8s coming soon)
+            └── quatrain-studio/    # The recipe directory
+                ├── compose.yaml    # Docker/Podman compose template
+                ├── package.json    # Recipe metadata
+                └── README.md       # Individual deployment instructions
+```
+
+### Recipe Components
+Each recipe directory must include:
+1. **`compose.yaml`** (or `compose.yml`): The Podman compose template. Route public HTTP services by declaring standard Traefik routing labels:
+   ```yaml
+   labels:
+     - traefik.enable=true
+     - traefik.http.routers.<app>.rule=Host(`${<APP>_SUBDOMAIN:-<app>}.${DOMAIN_NAME}`)
+     - traefik.http.routers.<app>.tls=true
+     - traefik.http.routers.<app>.entrypoints=websecure
+     - traefik.http.routers.<app>.tls.certresolver=${TRAEFIK_RESOLVER:-myresolver}
+     - traefik.http.services.<app>.loadbalancer.server.port=<port>
+   ```
+2. **`package.json`**: Metadata defining user query questions:
+   ```json
+   {
+     "name": "quatrain-studio",
+     "description": "Visual data modeling and developer dashboard",
+     "requiredEnv": [
+       "STUDIO_SUBDOMAIN",
+       "STUDIO_DATA_LOCATION"
+     ]
+   }
+   ```
+3. **`README.md`**: Descriptive setup, customization options, and volume mount documentation for users.
+
+### Best Practices for Recipe Providers
+- **Semantic Version Tags**: Proactively tag your repository releases using semantic versioning (e.g., `v1.0.0`, `v1.1.2`, `v2.0.0`). This allows users to add your repository pinned to safe major or minor release versions (like `owner/repo@v1`), which Tycho resolves to the latest stable minor/patch update dynamically.
 
 ## 4. Monitoring & Maintenance
 
