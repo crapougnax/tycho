@@ -1333,6 +1333,71 @@ function do_restore() {
     log "Restoration complete successfully!"
 }
 
+function do_alias() {
+    local cmd=$1
+    case "$cmd" in
+        register|update)
+            local subdomain=$2
+            local public_ip=""
+
+            # 1. Détection via la connexion SSH active
+            if [[ -n "$SSH_CONNECTION" ]]; then
+                public_ip=$(echo "$SSH_CONNECTION" | awk '{print $3}')
+            fi
+
+            # 2. Repli si non-SSH ou IP privée détectée (ex: test local)
+            if [[ -z "$public_ip" ]] || [[ "$public_ip" =~ ^192\.168\. ]] || [[ "$public_ip" =~ ^10\. ]] || [[ "$public_ip" =~ ^127\. ]]; then
+                public_ip=$(curl -s --max-time 5 https://ifconfig.me)
+            fi
+
+            # Validation finale
+            [[ -z "$public_ip" ]] && error "Impossible de détecter l'IP publique du serveur."
+
+            # 3. Récupération des informations d'authentification (.env)
+            if [[ -z "$subdomain" ]]; then
+                subdomain=$(grep "^DOMAIN_ALIAS=" "$ENV_FILE" | cut -d'=' -f2)
+                [[ -z "$subdomain" ]] && error "Usage: tycho alias register <subdomain>"
+            fi
+
+            local email=$(grep "^SSL_EMAIL=" "$ENV_FILE" | cut -d'=' -f2)
+            [[ -z "$email" ]] && error "Veuillez d'abord exécuter 'tycho setup' pour configurer votre adresse e-mail."
+
+            log "Demande d'alias *.${subdomain}.tycho.cc pointant vers l'IP publique : $public_ip..."
+
+            # 4. Appel API vers le service d'enregistrement (naming-api de tycho.cc)
+            local response=$(curl -s -w "\n%{http_code}" -X POST \
+                -H "Content-Type: application/json" \
+                -d "{\"subdomain\": \"$subdomain\", \"email\": \"$email\", \"ip\": \"$public_ip\"}" \
+                "https://api.tycho.cc/v1/alias/register")
+
+            local http_code=$(echo "$response" | tail -n1)
+            local body=$(echo "$response" | sed '$d')
+
+            if [[ "$http_code" -eq 200 ]]; then
+                log "\e[32mSuccès !\e[0m L'alias *.${subdomain}.tycho.cc pointe désormais vers $public_ip."
+                
+                # Sauvegarde locale de l'alias dans le fichier .env
+                sed -i "/^DOMAIN_ALIAS=/d" "$ENV_FILE"
+                echo "DOMAIN_ALIAS=$subdomain" >> "$ENV_FILE"
+                
+                # Mise à jour du DOMAIN_NAME pour que les recettes futures s'installent sous cet alias
+                sed -i "s|DOMAIN_NAME=.*|DOMAIN_NAME=${subdomain}.tycho.cc|g" "$ENV_FILE"
+                
+                log "Configuration locale mise à jour avec DOMAIN_NAME=${subdomain}.tycho.cc"
+            else
+                local err_msg=$(echo "$body" | jq -r '.error // "Erreur inconnue"')
+                error "L'enregistrement a échoué (Code $http_code) : $err_msg"
+            fi
+            ;;
+        *)
+            echo "Usage:"
+            echo "  tycho alias register <sous-domaine>  Enregistrer un alias *.sous-domaine.tycho.cc"
+            echo "  tycho alias update                   Mettre à jour l'IP pour l'alias existant"
+            echo ""
+            ;;
+    esac
+}
+
 function do_upgrade() {
     log "Upgrading Tycho CLI..."
     local tmp_file=$(mktemp)
@@ -1346,6 +1411,7 @@ function do_upgrade() {
     fi
     error "Upgrade failed."
 }
+
 
 function usage() {
     echo "Tycho CLI - $([[ $EUID -eq 0 ]] && echo 'SYSTEM MODE' || echo 'USER MODE')"
@@ -1373,6 +1439,10 @@ function usage() {
     echo "  upgrade          Update this CLI"
     echo "  stats            Monitor containers"
     echo "  ps               List active services"
+    echo "  alias <cmd>      Manage wildcard alias subdomains (register, update)"
+    echo "                   Options:"
+    echo "                     register <subdomain>  Register a new *.subdomain.tycho.cc"
+    echo "                     update                Update the server IP for the active subdomain"
     echo ""
 }
 
@@ -1386,6 +1456,7 @@ case $1 in
     backup)      shift; do_backup "$@" ;;
     restore)     shift; do_restore "$@" ;;
     stats)       do_stats ;;
+    alias)       do_alias "$2" "$3" ;;
     ps)          podman ps --filter "label=com.docker.compose.project" ;;
     down)
         check_env

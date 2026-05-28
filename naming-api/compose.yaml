@@ -1,0 +1,22 @@
+services:
+  naming-api:
+    build: .
+    container_name: tycho-naming-api
+    restart: always
+    ports:
+      - "4000:4000"
+    volumes:
+      - /data/naming-api:/app/data
+    environment:
+      - PORT=4000
+      - NODE_ENV=production
+      - IONOS_API_PREFIX=${IONOS_API_PREFIX}
+      - IONOS_API_SECRET=${IONOS_API_SECRET}
+      - API_SECRET_SALT=${API_SECRET_SALT:-default_tycho_secret_salt_123!}
+      - DOMAIN_SUFFIX=${DOMAIN_SUFFIX:-tycho.cc}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.naming-api.rule=Host(`api.${DOMAIN_NAME:-tycho.cc}`)"
+      - "traefik.http.routers.naming-api.entrypoints=websecure"
+      - "traefik.http.routers.naming-api.tls.certresolver=${TRAEFIK_RESOLVER:-myresolver}"
+      - "traefik.http.services.naming-api.loadbalancer.server.port=4000"

@@ -1,0 +1,63 @@
+name: Naming API - Build & Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'naming-api/**'
+      - '.github/workflows/naming-api-ci.yaml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'naming-api/**'
+      - '.github/workflows/naming-api-ci.yaml'
+
+jobs:
+  quality-gate:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: |
+          cd naming-api
+          bun install
+
+      - name: Type checking
+        run: |
+          cd naming-api
+          bun run build
+
+  build-image:
+    name: OCI Image Build Validation
+    needs: quality-gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Naming API Image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./naming-api
+          file: ./naming-api/Dockerfile
+          push: false # Build validation only (can be set to true if registry secrets are added)
+          tags: tycho-naming-api:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
