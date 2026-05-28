@@ -1,0 +1,17 @@
+services:
+  backup-receiver:
+    image: lscr.io/linuxserver/openssh-server:latest
+    container_name: tycho-backup-receiver
+    restart: always
+    ports:
+      - "${BACKUP_RECEIVER_PORT:-2222}:22"
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=${GENERIC_TIMEZONE:-Europe/Paris}
+      - USER_NAME=backup
+      - PUBLIC_KEY=${BACKUP_RECEIVER_PUBLIC_KEY}
+      - SUDO_ACCESS=false
+    volumes:
+      - ${BASE_STORAGE_PATH:-/data}/backup-receiver/backups:/backups
+      - ${BASE_STORAGE_PATH:-/data}/backup-receiver/config:/config

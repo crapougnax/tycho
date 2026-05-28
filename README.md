@@ -2,7 +2,7 @@
 
 Tycho is an autonomous server management CLI designed to deploy and manage a complete, self-hosted infrastructure using Podman. It supports two primary deployment patterns.
 
-For comprehensive setup guides and architectural instructions, check the [Tycho HOWTO](HOWTO.md).
+Before diving in, check out the [Tycho Philosophy](PHILOSOPHY.md) to understand the project's core principles. For comprehensive setup guides and architectural instructions, see the [Tycho HOWTO](HOWTO.md).
 
 ## Key Features
 
@@ -57,6 +57,8 @@ More robust. Traefik is a system-level gateway, and users install their apps sep
 - `tycho install [repo/]<pkg>`: Deploy a new service (interactive).
 - `tycho uninstall <pkg>`: Cleanly remove a service and its data.
 - `tycho repo <cmd>`: Manage third-party recipe repositories (add, list, remove, update, boilerplate). See the [Repository User Guide](HOWTO.md#3-managing-repositories-user-guide) for usage.
+- `tycho backup [file] [opts]`: Backup configurations (metadata) and persistent databases. Supports CRON, service scoping, remote SSH scp/rsync transport, and incremental syncing. See the [Backup Guide](HOWTO.md#backup--restore).
+- `tycho restore <file>`: Overwrite configurations and databases from a backup archive or folder. Scoped boundaries prevent accidental data loss. See the [Restore Guide](HOWTO.md#backup--restore).
 - `tycho stats`: Monitor your server's health.
 - `tycho upgrade`: Self-update the CLI to the latest version.
 

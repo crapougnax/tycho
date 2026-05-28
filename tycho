@@ -805,6 +805,534 @@ function do_stats() {
     podman stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}"
 }
 
+function do_backup() {
+    check_env
+    
+    local backup_file=""
+    local service=""
+    local with_data=false
+    local non_interactive=false
+    local remote_dest=""
+    local incremental=false
+    local port=22
+    local identity=""
+    local keep=""
+    local stop_services=false
+    
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --service)
+                service="$2"
+                shift 2
+                ;;
+            --with-data|-d)
+                with_data=true
+                shift
+                ;;
+            --non-interactive|-y)
+                non_interactive=true
+                shift
+                ;;
+            --remote)
+                remote_dest="$2"
+                shift 2
+                ;;
+            --incremental)
+                incremental=true
+                shift
+                ;;
+            --port)
+                port="$2"
+                shift 2
+                ;;
+            --identity)
+                identity="$2"
+                shift 2
+                ;;
+            --keep)
+                keep="$2"
+                shift 2
+                ;;
+            --stop-services)
+                stop_services=true
+                shift
+                ;;
+            -*)
+                error "Unknown option: $1"
+                ;;
+            *)
+                if [[ -z "$backup_file" ]]; then
+                    backup_file="$1"
+                else
+                    error "Multiple backup files or arguments specified: $1"
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    # Resolve active storage path
+    local base_storage=$(grep "^BASE_STORAGE_PATH=" "$ENV_FILE" | cut -d'=' -f2)
+    if [[ -z "$base_storage" ]]; then
+        error "BASE_STORAGE_PATH not configured in .env."
+    fi
+
+    # Determine default backup name if empty and not in folder-based incremental mode
+    if [[ -z "$backup_file" ]] && [[ "$incremental" == "false" ]]; then
+        local timestamp=$(date +%Y%m%d-%H%M%S)
+        if [[ -n "$service" ]]; then
+            backup_file="tycho-backup-$service-$timestamp.tar.gz"
+        else
+            backup_file="tycho-backup-$timestamp.tar.gz"
+        fi
+    fi
+
+    log "Starting backup..."
+    if [[ -n "$service" ]]; then
+        log "  Scope: Service-level ($service)"
+    else
+        log "  Scope: Full system"
+    fi
+    log "  Type: $([[ "$with_data" == "true" ]] && echo 'Metadata + Data' || echo 'Metadata only')"
+    log "  Mode: $([[ "$incremental" == "true" ]] && echo 'Incremental syncing' || echo 'Standard archive')"
+
+    # Validate target directories/services
+    local source_workdir="$WORK_DIR"
+    local source_data=""
+    
+    if [[ -n "$service" ]]; then
+        local target_dir=$(resolve_local_pkg_dir "$service")
+        if [[ ! -d "$target_dir" ]]; then
+            error "Service $service is not installed locally."
+        fi
+        source_workdir="$target_dir"
+        if [[ "$with_data" == "true" ]]; then
+            source_data="$base_storage/$(basename "$target_dir")"
+            if [[ ! -d "$source_data" ]]; then
+                log "\e[33mWarning: Data folder '$source_data' does not exist.\e[0m"
+            fi
+        fi
+    else
+        if [[ "$with_data" == "true" ]]; then
+            source_data="$base_storage"
+        fi
+    fi
+
+    # Interactive stop checks (or non-interactive force stop if requested)
+    local active_services=()
+    local should_stop=false
+    
+    if [[ "$non_interactive" == "false" ]]; then
+        read -p "Stop running services to ensure backup consistency? (y/N): " confirm_stop
+        [[ "$confirm_stop" == "y" ]] && should_stop=true
+    elif [[ "$stop_services" == "true" ]]; then
+        should_stop=true
+    fi
+
+    if [[ "$should_stop" == "true" ]]; then
+        log "Stopping active containers..."
+        local scan_dir="$WORK_DIR/$PLATFORM"
+        if [[ -n "$service" ]]; then
+            scan_dir=$(resolve_local_pkg_dir "$service")
+        fi
+        
+        while read -r compose_dir; do
+            if [[ -d "$compose_dir" ]] && [[ -f "$compose_dir/compose.yaml" ]]; then
+                if cd "$compose_dir" && podman compose ps -q &>/dev/null; then
+                    log "  Stopping $(basename "$compose_dir")...."
+                    podman compose --env-file "$ENV_FILE" stop
+                    active_services+=("$compose_dir")
+                fi
+            fi
+        done < <(find "$scan_dir" -type d -mindepth 1 -maxdepth 3 2>/dev/null)
+    fi
+
+    # Manifest creation
+    local meta_tmp=$(mktemp)
+    local type_val="full"
+    [[ -n "$service" ]] && type_val="service"
+    
+    echo "TYPE=\"$type_val\"" > "$meta_tmp"
+    echo "SERVICE=\"$service\"" >> "$meta_tmp"
+    echo "WITH_DATA=\"$with_data\"" >> "$meta_tmp"
+    echo "TIMESTAMP=\"$(date +%Y%m%d-%H%M%S)\"" >> "$meta_tmp"
+
+    # Create directory for backup if saving locally
+    if [[ -n "$backup_file" ]]; then
+        mkdir -p "$(dirname "$backup_file")"
+    fi
+
+    local backup_success=false
+
+    if [[ "$incremental" == "true" ]]; then
+        # Folder-based incremental backup using rsync
+        if [[ -z "$backup_file" ]] && [[ -z "$remote_dest" ]]; then
+            error "Incremental local backup requires a target folder argument."
+        fi
+        
+        local sync_target=""
+        if [[ -n "$remote_dest" ]]; then
+            sync_target="$remote_dest"
+            log "Starting remote incremental rsync synchronization to '$sync_target'..."
+        else
+            sync_target="$backup_file"
+            mkdir -p "$sync_target"
+            log "Starting local incremental rsync synchronization to '$sync_target'..."
+        fi
+
+        # Sync metadata
+        local rsync_opts="-avz"
+        if [[ -n "$identity" ]]; then
+            rsync_opts="$rsync_opts -e 'ssh -p $port -i $identity'"
+        else
+            rsync_opts="$rsync_opts -e 'ssh -p $port'"
+        fi
+        
+        # Write metadata file directly to source folder to ensure it syncs
+        cp "$meta_tmp" "$source_workdir/.tycho-backup-meta"
+        
+        # Rsync the workdir / service folder
+        if [[ -n "$remote_dest" ]]; then
+            eval rsync $rsync_opts --delete "$source_workdir/" "$sync_target/metadata/"
+            if [[ $? -eq 0 ]]; then
+                backup_success=true
+            fi
+            if [[ -n "$source_data" ]] && [[ -d "$source_data" ]]; then
+                log "Syncing application data files..."
+                eval rsync $rsync_opts --delete "$source_data/" "$sync_target/data/"
+                if [[ $? -ne 0 ]]; then
+                    backup_success=false
+                fi
+            fi
+        else
+            rsync -av --delete "$source_workdir/" "$sync_target/metadata/"
+            if [[ $? -eq 0 ]]; then
+                backup_success=true
+            fi
+            if [[ -n "$source_data" ]] && [[ -d "$source_data" ]]; then
+                log "Syncing application data files..."
+                rsync -av --delete "$source_data/" "$sync_target/data/"
+                if [[ $? -ne 0 ]]; then
+                    backup_success=false
+                fi
+            fi
+        fi
+        
+        # Cleanup local manifest copy in source workdir
+        rm -f "$source_workdir/.tycho-backup-meta"
+    else
+        # Standard archive-based backup
+        local tar_tmp_dir=$(mktemp -d)
+        
+        # Copy files to temp structure to absolute target compatibility and add manifest
+        mkdir -p "$tar_tmp_dir/meta"
+        cp -R "$source_workdir/" "$tar_tmp_dir/meta/"
+        cp "$meta_tmp" "$tar_tmp_dir/meta/.tycho-backup-meta"
+        
+        local tar_args=("-czf" "$backup_file" "-C" "$tar_tmp_dir" "meta")
+        
+        if [[ -n "$source_data" ]] && [[ -d "$source_data" ]]; then
+            mkdir -p "$tar_tmp_dir/data"
+            cp -R "$source_data/" "$tar_tmp_dir/data/"
+            tar_args+=("data")
+        fi
+
+        log "Creating backup archive at '$backup_file'..."
+        tar "${tar_args[@]}" 2>/dev/null
+        if [[ $? -eq 0 ]]; then
+            backup_success=true
+            log "Backup successfully created: $(du -sh "$backup_file" | cut -f1) ($backup_file)"
+        else
+            log "\e[31mError: Backup compilation failed.\e[0m"
+        fi
+        
+        # Clean up temp folder
+        rm -rf "$tar_tmp_dir"
+        
+        # Push to remote via scp if requested
+        if [[ "$backup_success" == "true" ]] && [[ -n "$remote_dest" ]]; then
+            log "Transferring archive to remote target '$remote_dest'..."
+            local scp_cmd="scp -P $port"
+            [[ -n "$identity" ]] && scp_cmd="$scp_cmd -i $identity"
+            eval $scp_cmd "$backup_file" "$remote_dest"
+            if [[ $? -eq 0 ]]; then
+                log "Remote transfer complete!"
+            else
+                log "\e[31mError: Remote transfer failed.\e[0m"
+                backup_success=false
+            fi
+        fi
+    fi
+
+    # Clean up temp manifest
+    rm -f "$meta_tmp"
+
+    # Start services again if stopped
+    if [[ "${#active_services[@]}" -gt 0 ]]; then
+        log "Restarting stopped containers..."
+        for compose_dir in "${active_services[@]}"; do
+            log "  Starting $(basename "$compose_dir")...."
+            cd "$compose_dir" && podman compose --env-file "$ENV_FILE" start
+        done
+    fi
+
+    # Apply Retention policy if requested
+    if [[ "$backup_success" == "true" ]] && [[ -n "$keep" ]]; then
+        # Validate keep is integer
+        if [[ ! "$keep" =~ ^[0-9]+$ ]]; then
+            error "Retention keep count '--keep' must be a positive integer."
+        fi
+
+        if [[ -n "$remote_dest" ]] && [[ "$incremental" == "false" ]]; then
+            # Prune remote archives
+            log "Applying remote retention policy (keeping newest $keep)..."
+            local remote_host_path=$(echo "$remote_dest" | cut -d':' -f1)
+            local remote_dir=$(echo "$remote_dest" | cut -d':' -f2)
+            local ssh_cmd="ssh -p $port"
+            [[ -n "$identity" ]] && ssh_cmd="$ssh_cmd -i $identity"
+            
+            local match_pattern="tycho-backup-*.tar.gz"
+            [[ -n "$service" ]] && match_pattern="tycho-backup-$service-*.tar.gz"
+            
+            # Formulate remote prune command
+            eval $ssh_cmd "$remote_host_path" "\"ls -tp $remote_dir/$match_pattern 2>/dev/null | grep -v '/' | tail -n +$((keep + 1)) | xargs -I {} rm -f $remote_dir/{}\""
+        elif [[ "$incremental" == "false" ]]; then
+            # Prune local archives
+            log "Applying local retention policy (keeping newest $keep)..."
+            local target_dir_path=$(dirname "$backup_file")
+            local match_pattern="tycho-backup-*.tar.gz"
+            [[ -n "$service" ]] && match_pattern="tycho-backup-$service-*.tar.gz"
+            
+            # Find and sort local matching archives
+            local old_backups=()
+            while read -r file; do
+                if [[ -f "$file" ]]; then
+                    old_backups+=("$file")
+                fi
+            done < <(ls -t "$target_dir_path"/$match_pattern 2>/dev/null | tail -n +$((keep + 1)))
+
+            for old_f in "${old_backups[@]}"; do
+                log "  Pruning old backup: $(basename "$old_f")"
+                rm -f "$old_f"
+            done
+        fi
+    fi
+
+    if [[ "$backup_success" == "true" ]]; then
+        log "Backup process completed successfully!"
+    else
+        error "Backup process failed."
+    fi
+}
+
+function do_restore() {
+    local backup_file=""
+    local non_interactive=false
+    
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --non-interactive|-y)
+                non_interactive=true
+                shift
+                ;;
+            -*)
+                error "Unknown option: $1"
+                ;;
+            *)
+                if [[ -z "$backup_file" ]]; then
+                    backup_file="$1"
+                else
+                    error "Multiple arguments specified: $1"
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    [[ -z "$backup_file" ]] && error "Usage: tycho restore <backup_file_or_dir> [--non-interactive]"
+    [ ! -e "$backup_file" ] && error "Backup source '$backup_file' not found."
+
+    log "Reading backup manifest..."
+    local manifest_content=""
+    if [[ -d "$backup_file" ]]; then
+        if [[ -f "$backup_file/metadata/.tycho-backup-meta" ]]; then
+            manifest_content=$(cat "$backup_file/metadata/.tycho-backup-meta")
+        fi
+    else
+        manifest_content=$(tar -xf "$backup_file" -O meta/.tycho-backup-meta 2>/dev/null)
+    fi
+
+    if [[ -z "$manifest_content" ]]; then
+        error "Could not read backup manifest (.tycho-backup-meta). Invalid backup format."
+    fi
+
+    # Parse variables from manifest safely
+    local TYPE=""
+    local SERVICE=""
+    local WITH_DATA=""
+    local TIMESTAMP=""
+    
+    # Load manifest variables
+    eval "$manifest_content"
+
+    log "Backup Manifest Loaded:"
+    log "  Timestamp: $TIMESTAMP"
+    log "  Scope: $([[ "$TYPE" == "service" ]] && echo "Service-level ($SERVICE)" || echo "Full system")"
+    log "  Contains data: $WITH_DATA"
+
+    if [[ "$non_interactive" == "false" ]]; then
+        read -p "WARNING: Restoring will overwrite existing configuration/data. Continue? (y/N): " confirm
+        [[ "$confirm" != "y" ]] && exit 0
+    fi
+
+    # Resolve paths
+    check_env
+    local base_storage=$(grep "^BASE_STORAGE_PATH=" "$ENV_FILE" | cut -d'=' -f2)
+    if [[ -z "$base_storage" ]]; then
+        error "BASE_STORAGE_PATH not configured in .env."
+    fi
+
+    # Stopping active services
+    if [[ "$TYPE" == "service" ]]; then
+        local target_dir=$(resolve_local_pkg_dir "$SERVICE")
+        if [[ -d "$target_dir" ]] && [[ -f "$target_dir/compose.yaml" ]]; then
+            log "Stopping service $SERVICE..."
+            cd "$target_dir" && podman compose --env-file "$ENV_FILE" down 2>/dev/null
+        fi
+    else
+        log "Stopping all active services..."
+        while read -r compose_dir; do
+            if [[ -d "$compose_dir" ]] && [[ -f "$compose_dir/compose.yaml" ]]; then
+                log "  Stopping $(basename "$compose_dir")..."
+                cd "$compose_dir" && podman compose --env-file "$ENV_FILE" down 2>/dev/null
+            fi
+        done < <(find "$WORK_DIR/$PLATFORM" -type d -mindepth 2 -maxdepth 3 2>/dev/null)
+    fi
+
+    log "Restoring files..."
+    local restore_success=false
+
+    if [[ -d "$backup_file" ]]; then
+        # Incremental directory restore using rsync
+        if [[ "$TYPE" == "service" ]]; then
+            local target_dir=$(resolve_local_pkg_dir "$SERVICE")
+            if [[ -z "$target_dir" ]]; then
+                target_dir="$WORK_DIR/$PLATFORM/recipes/$SERVICE"
+            fi
+            mkdir -p "$target_dir"
+            rsync -av --delete "$backup_file/metadata/" "$target_dir/"
+            if [[ $? -eq 0 ]]; then
+                restore_success=true
+            fi
+            if [[ "$WITH_DATA" == "true" ]]; then
+                local target_data="$base_storage/$SERVICE"
+                mkdir -p "$target_data"
+                rsync -av --delete "$backup_file/data/" "$target_data/"
+                if [[ $? -ne 0 ]]; then
+                    restore_success=false
+                fi
+            fi
+        else
+            mkdir -p "$WORK_DIR"
+            rsync -av --delete "$backup_file/metadata/" "$WORK_DIR/"
+            if [[ $? -eq 0 ]]; then
+                restore_success=true
+            fi
+            if [[ "$WITH_DATA" == "true" ]]; then
+                mkdir -p "$base_storage"
+                rsync -av --delete "$backup_file/data/" "$base_storage/"
+                if [[ $? -ne 0 ]]; then
+                    restore_success=false
+                fi
+            fi
+        fi
+    else
+        # Archive-based tar restore
+        local tar_tmp_dir=$(mktemp -d)
+        tar -xzf "$backup_file" -C "$tar_tmp_dir"
+        if [[ $? -eq 0 ]]; then
+            if [[ "$TYPE" == "service" ]]; then
+                local target_dir=$(resolve_local_pkg_dir "$SERVICE")
+                if [[ -z "$target_dir" ]]; then
+                    target_dir="$WORK_DIR/$PLATFORM/recipes/$SERVICE"
+                fi
+                mkdir -p "$target_dir"
+                cp -Rf "$tar_tmp_dir/meta/"* "$target_dir/"
+                restore_success=true
+                if [[ "$WITH_DATA" == "true" ]] && [[ -d "$tar_tmp_dir/data" ]]; then
+                    local target_data="$base_storage/$SERVICE"
+                    mkdir -p "$target_data"
+                    cp -Rf "$tar_tmp_dir/data/"* "$target_data/"
+                fi
+            else
+                mkdir -p "$WORK_DIR"
+                cp -Rf "$tar_tmp_dir/meta/"* "$WORK_DIR/"
+                restore_success=true
+                if [[ "$WITH_DATA" == "true" ]] && [[ -d "$tar_tmp_dir/data" ]]; then
+                    mkdir -p "$base_storage"
+                    cp -Rf "$tar_tmp_dir/data/"* "$base_storage/"
+                fi
+            fi
+        fi
+        rm -rf "$tar_tmp_dir"
+    fi
+
+    if [[ "$restore_success" == "false" ]]; then
+        error "File restoration failed."
+    fi
+
+    # Read config again in case env was restored
+    check_env
+    base_storage=$(grep "^BASE_STORAGE_PATH=" "$ENV_FILE" | cut -d'=' -f2)
+
+    # Offer service start
+    local start_services=false
+    if [[ "$non_interactive" == "false" ]]; then
+        read -p "Start restored services? (Y/n): " start_confirm
+        [[ "$start_confirm" != "n" ]] && start_services=true
+    else
+        start_services=true
+    fi
+
+    if [[ "$start_services" == "true" ]]; then
+        log "Starting restored services..."
+        local core_dirs=()
+        local recipe_dirs=()
+        
+        local scan_dir="$WORK_DIR/$PLATFORM"
+        if [[ "$TYPE" == "service" ]]; then
+            scan_dir=$(resolve_local_pkg_dir "$SERVICE")
+            if [[ -z "$scan_dir" ]]; then
+                scan_dir="$WORK_DIR/$PLATFORM/recipes/$SERVICE"
+            fi
+        fi
+        
+        while read -r compose_dir; do
+            if [[ -d "$compose_dir" ]] && [[ -f "$compose_dir/compose.yaml" ]]; then
+                if [[ "$compose_dir" == *"/core/"* ]]; then
+                    core_dirs+=("$compose_dir")
+                else
+                    recipe_dirs+=("$compose_dir")
+                fi
+            fi
+        done < <(find "$scan_dir" -type d -mindepth 1 -maxdepth 3 2>/dev/null)
+        
+        for c_dir in "${core_dirs[@]}"; do
+            log "  Starting core service $(basename "$c_dir")..."
+            cd "$c_dir" && podman compose --env-file "$ENV_FILE" up -d
+        done
+        
+        for r_dir in "${recipe_dirs[@]}"; do
+            log "  Starting recipe service $(basename "$r_dir")..."
+            cd "$r_dir" && podman compose --env-file "$ENV_FILE" up -d
+        done
+    fi
+    
+    log "Restoration complete successfully!"
+}
+
 function do_upgrade() {
     log "Upgrading Tycho CLI..."
     local tmp_file=$(mktemp)
@@ -828,6 +1356,20 @@ function usage() {
     echo "  install <pkg>    Install a recipe or core service"
     echo "  uninstall <pkg>  Remove a service"
     echo "  repo <cmd>       Manage recipe repositories (add, list, remove, update)"
+    echo "  backup [file]    Backup configurations (metadata) and application databases"
+    echo "                   Options:"
+    echo "                     --service <name>      Backup only a specific service"
+    echo "                     --with-data, -d       Include persistent application files/data"
+    echo "                     --keep <N>            Retain only the newest N timestamped archives"
+    echo "                     --remote <dest>       Transfer archive to remote target (scp/rsync)"
+    echo "                     --incremental         Use rsync for local/remote folder replication"
+    echo "                     --port <port>         Specify remote SSH port (default: 22)"
+    echo "                     --identity <key>      Specify SSH private key identity path"
+    echo "                     --stop-services       Stop containers in non-interactive mode"
+    echo "                     --non-interactive, -y Run silently without interactive prompts"
+    echo "  restore <file>   Restore configurations and databases from a backup archive"
+    echo "                   Options:"
+    echo "                     --non-interactive, -y Run silently without interactive prompts"
     echo "  upgrade          Update this CLI"
     echo "  stats            Monitor containers"
     echo "  ps               List active services"
@@ -841,6 +1383,8 @@ case $1 in
     install|up)  do_install "$2" ;;
     uninstall)   do_uninstall "$2" ;;
     repo)        do_repo "$2" "$3" "$4" ;;
+    backup)      shift; do_backup "$@" ;;
+    restore)     shift; do_restore "$@" ;;
     stats)       do_stats ;;
     ps)          podman ps --filter "label=com.docker.compose.project" ;;
     down)

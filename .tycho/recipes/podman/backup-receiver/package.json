@@ -1,0 +1,10 @@
+{
+  "name": "backup-receiver",
+  "version": "1.0.0",
+  "description": "Secure remote SSH & rsync backup receiver server.",
+  "requiredEnv": [
+    "BACKUP_RECEIVER_PORT",
+    "BACKUP_RECEIVER_PUBLIC_KEY"
+  ],
+  "license": "AGPL-v3"
+}

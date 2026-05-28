@@ -138,6 +138,79 @@ Each recipe directory must include:
 - **Upgrade CLI**: `tycho upgrade` downloads the latest version of the management script from GitHub.
 - **Uninstall**: `tycho uninstall <pkg>` stops the service and optionally cleans up volumes and networks.
 
+### Backup & Restore
+
+Tycho features built-in server backup and restoration capabilities. These commands ensure that all your configurations, added third-party repositories, local recipe definitions, and persistent databases/application storage are backed up and restored safely.
+
+Backups are **self-aware**: every backup contains a shell-sourceable `.tycho-backup-meta` manifest declaring its type (full vs. service-specific), date, and storage scope. The restore command reads this manifest first to automatically isolate target boundaries and verify safety.
+
+#### 1. Scope and Separation (Metadata vs. Data)
+- **Metadata Backup (Default)**: Archives configurations, `.env`, recipe directories, and repository databases (`$WORK_DIR`). It is extremely fast, small, and highly secure.
+  ```bash
+  tycho backup [target_file.tar.gz]
+  ```
+- **Full Backup (Metadata + Data)**: Includes all persistent application storage files inside `$BASE_STORAGE_PATH` (e.g. database directories, uploads). Trigger this using the `--with-data` or `-d` flag:
+  ```bash
+  tycho backup [target_file.tar.gz] --with-data
+  ```
+- **Service-Level Backup**: Restricts the backup to a specific service only.
+  ```bash
+  # Back up only nextcloud configuration (metadata)
+  tycho backup --service nextcloud
+  
+  # Back up nextcloud configuration AND its persistent data files
+  tycho backup --service nextcloud --with-data
+  ```
+
+#### 2. Non-Interactive Operations (CRON Automation)
+For automated backups (e.g., via CRON), append the `--non-interactive` or `-y` flag to bypass all interactive prompts:
+```bash
+tycho backup --non-interactive
+```
+> [!IMPORTANT]
+> **Downtime Prevention**: By default, Tycho does not stop active container services in non-interactive mode. To explicitly stop active containers temporarily to guarantee complete transaction/database consistency, you must pass the `--stop-services` flag:
+> ```bash
+> tycho backup --non-interactive --stop-services
+> ```
+
+#### 3. Remote Transport & Incremental Syncing
+- **Standard Remote Transfer**: Copies the generated `.tar.gz` to a remote target using secure copy:
+  ```bash
+  tycho backup --remote backup-user@backup-host:/path/to/backups --port 2222 --identity ~/.ssh/id_rsa
+  ```
+- **Incremental Replication**: Uses `rsync` instead of `tar` compression to replicate directories directly. This transfers only differences and is highly efficient:
+  ```bash
+  # Local incremental replication to a target directory
+  tycho backup /var/backups/tycho-sync --incremental --with-data
+  
+  # Remote incremental replication over SSH
+  tycho backup --remote backup-user@backup-host:/var/backups/tycho-sync --incremental --with-data
+  ```
+
+#### 4. Retention Policy Pruning (`--keep <N>`)
+Specify a maximum number of historical backups to retain. Tycho will automatically sort matching archives chronologically and prune the oldest:
+```bash
+# Keep only the 5 newest nextcloud backups locally
+tycho backup --service nextcloud --keep 5
+
+# Works over remote standard connections as well
+tycho backup --remote user@host:/backups --keep 7
+```
+
+#### 5. Restore from Backup
+The restore command safely stops active containers (either globally or for the specific service) before overwriting, and will offer to restart services sequentially (core Traefik gateway first, then application recipes) once restored.
+
+```bash
+tycho restore <backup_file.tar.gz_or_dir>
+```
+To run non-interactively without overwrite confirmations:
+```bash
+tycho restore <backup_file.tar.gz> --non-interactive
+```
+
+> [!CAUTION]
+> **Destructive Operation**: Restoring from a backup will overwrite current configurations and persistent data directories under `$WORK_DIR` and `$BASE_STORAGE_PATH` within the backup's scoped boundaries (e.g., overwriting ONLY the target service files if it was a service-level backup).
+
 ## 5. Troubleshooting
 
 - **Logs**: `tycho logs <package>` (e.g., `tycho logs core/traefik`).
