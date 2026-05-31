@@ -67,7 +67,7 @@ function run_podman_compose() {
     local compose_bin
     compose_bin=$(resolve_compose_bin)
     if [[ $? -ne 0 ]] || [[ -z "$compose_bin" ]]; then
-        error "No compose engine (podman-compose or docker-compose) was found in the PATH of the current user ($(whoami)).\n\nTo resolve this, please install podman-compose:\n  - Via Pip (system-wide):   sudo pip3 install podman-compose\n  - Via Package Manager:    sudo apt update && sudo apt install -y podman-compose (or dnf/brew)\n\nIf you installed it locally (e.g. pip3 install --user), please ensure the binary is in the PATH of the root user."
+        error "No compose engine (podman-compose or docker-compose) was found in the PATH of the current user ($(whoami)).\n\nTo resolve this, please install one of the following:\n  - Option A: Docker Compose (Recommended, always available in apt):\n    sudo apt update && sudo apt install -y docker-compose\n  - Option B: Podman Compose via Pip:\n    sudo apt update && sudo apt install -y python3-pip && sudo pip3 install podman-compose\n\nIf you already installed it locally (e.g. pip3 install --user), please ensure the binary is in the PATH of the root user."
     fi
     
     (
