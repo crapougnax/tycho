@@ -1433,8 +1433,45 @@ function do_alias() {
 function do_upgrade() {
     log "Upgrading Tycho CLI..."
     
-    # Resolve the latest version tag from GitHub API
-    local resolved_version=$(curl -s -f "$GITHUB_API/releases/latest" | jq -r '.tag_name' 2>/dev/null || echo "latest")
+    # Resolve the latest version tag from GitHub API (including pre-releases)
+    local resolved_version=""
+    resolved_version=$(curl -s -f "$GITHUB_API/releases" | jq -r '.[0].tag_name' 2>/dev/null)
+    if [[ $? -ne 0 ]] || [[ -z "$resolved_version" ]] || [[ "$resolved_version" == "null" ]]; then
+        resolved_version="latest"
+    fi
+    
+    # Check if the resolved latest version is a pre-release (starts with v0. or contains a hyphen)
+    if [[ "$resolved_version" == v0.* ]] || [[ "$resolved_version" == *-[a-zA-Z]* ]]; then
+        local stable_tag=""
+        stable_tag=$(curl -s -f "$GITHUB_API/releases/latest" | jq -r '.tag_name' 2>/dev/null || echo "")
+        
+        if [[ -n "$stable_tag" ]] && [[ "$stable_tag" != "$resolved_version" ]]; then
+            echo -e "\e[33m\e[1mNOTICE: The latest version is a pre-release: $resolved_version\e[0m" >&2
+            echo -e "The latest stable production release is: $stable_tag" >&2
+            echo "" >&2
+            echo "Would you like to upgrade to the pre-release or fall back to the stable version?" >&2
+            echo "  1) Proceed with pre-release ($resolved_version)" >&2
+            echo "  2) Fall back to latest stable version ($stable_tag) [default]" >&2
+            echo "  3) Cancel upgrade" >&2
+            
+            local choice="2"
+            read -p "Choice [1-3, default: 2]: " choice
+            choice=${choice:-2}
+            
+            case "$choice" in
+                1)
+                    # Proceed with pre-release
+                    ;;
+                3)
+                    log "Upgrade cancelled."
+                    exit 0
+                    ;;
+                *)
+                    resolved_version="$stable_tag"
+                    ;;
+            esac
+        fi
+    fi
     
     # Resolve the appropriate download URL
     local download_url=""

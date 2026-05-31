@@ -1,0 +1,7 @@
+{
+  "name": "tycho",
+  "version": "0.9.7",
+  "description": "Autonomous Server Management CLI backed by Podman & Git",
+  "main": "tycho",
+  "license": "AGPL-3.0"
+}

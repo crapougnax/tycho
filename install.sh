@@ -11,23 +11,7 @@ REPO_NAME="tycho"
 # Allow specifying target version via environment variable, defaults to 'latest' release
 TYCHO_VERSION="${TYCHO_VERSION:-latest}"
 
-if [[ "$TYCHO_VERSION" == "latest" ]]; then
-    # Resolve the latest release tag (including pre-releases) dynamically from GitHub API
-    RESOLVED_TAG=""
-    RESOLVED_TAG=$(curl -s -f "https://api.github.com/repos/$REPO_USER/$REPO_NAME/releases" | jq -r '.[0].tag_name' 2>/dev/null)
-    if [[ $? -eq 0 ]] && [[ -n "$RESOLVED_TAG" ]] && [[ "$RESOLVED_TAG" != "null" ]]; then
-        DOWNLOAD_URL="https://github.com/$REPO_USER/$REPO_NAME/releases/download/$RESOLVED_TAG/tycho"
-    else
-        # Point to the asset inside the latest GitHub Release as a safe fallback
-        DOWNLOAD_URL="https://github.com/$REPO_USER/$REPO_NAME/releases/latest/download/tycho"
-    fi
-elif [[ "$TYCHO_VERSION" =~ ^v[0-9] ]]; then
-    # Point to a specific tagged GitHub Release asset
-    DOWNLOAD_URL="https://github.com/$REPO_USER/$REPO_NAME/releases/download/$TYCHO_VERSION/tycho"
-else
-    # Fallback to downloading directly from a raw branch (e.g., 'main' or 'dev')
-    DOWNLOAD_URL="https://raw.githubusercontent.com/$REPO_USER/$REPO_NAME/$TYCHO_VERSION/tycho"
-fi
+DOWNLOAD_URL=""
 
 # Colors for premium UI
 GREEN="\e[32m"
@@ -147,6 +131,64 @@ safe_read() {
     # Assign value with default fallback using printf -v to prevent shell injection or quoting issues
     printf -v "$var_name" "%s" "${response:-$default_val}"
 }
+
+# -------------------------------------------------------------
+# Resolve download URL and target version
+# -------------------------------------------------------------
+if [[ "$TYCHO_VERSION" == "latest" ]]; then
+    # Resolve the latest release tag (including pre-releases) dynamically from GitHub API
+    RESOLVED_TAG=""
+    RESOLVED_TAG=$(curl -s -f "https://api.github.com/repos/$REPO_USER/$REPO_NAME/releases" | jq -r '.[0].tag_name' 2>/dev/null)
+    if [[ $? -eq 0 ]] && [[ -n "$RESOLVED_TAG" ]] && [[ "$RESOLVED_TAG" != "null" ]]; then
+        # Check if it's a pre-release (starts with v0. or contains -)
+        if [[ "$RESOLVED_TAG" == v0.* ]] || [[ "$RESOLVED_TAG" == *-[a-zA-Z]* ]]; then
+            # Query the latest stable version
+            STABLE_TAG=$(curl -s -f "https://api.github.com/repos/$REPO_USER/$REPO_NAME/releases/latest" | jq -r '.tag_name' 2>/dev/null || echo "")
+            
+            # If a stable tag exists and is different, ask the user
+            if [[ -n "$STABLE_TAG" ]] && [[ "$STABLE_TAG" != "$RESOLVED_TAG" ]]; then
+                echo -e "${YELLOW}${BOLD}NOTICE: The latest version is a pre-release: $RESOLVED_TAG${NC}" >&2
+                echo -e "The latest stable production release is: $STABLE_TAG" >&2
+                echo "" >&2
+                echo "Would you like to install the pre-release or fall back to the stable version?" >&2
+                echo "  1) Proceed with pre-release ($RESOLVED_TAG)" >&2
+                echo "  2) Fall back to latest stable version ($STABLE_TAG) [default]" >&2
+                echo "  3) Cancel installation" >&2
+                
+                choice="2"
+                safe_read "Choice [1-3, default: 2]: " choice "2"
+                
+                case "$choice" in
+                    1)
+                        DOWNLOAD_URL="https://github.com/$REPO_USER/$REPO_NAME/releases/download/$RESOLVED_TAG/tycho"
+                        TYCHO_VERSION="$RESOLVED_TAG"
+                        ;;
+                    3)
+                        echo "Installation cancelled." >&2
+                        exit 0
+                        ;;
+                    *)
+                        DOWNLOAD_URL="https://github.com/$REPO_USER/$REPO_NAME/releases/download/$STABLE_TAG/tycho"
+                        TYCHO_VERSION="$STABLE_TAG"
+                        ;;
+                esac
+            else
+                DOWNLOAD_URL="https://github.com/$REPO_USER/$REPO_NAME/releases/download/$RESOLVED_TAG/tycho"
+            fi
+        else
+            DOWNLOAD_URL="https://github.com/$REPO_USER/$REPO_NAME/releases/download/$RESOLVED_TAG/tycho"
+        fi
+    else
+        # Point to the asset inside the latest GitHub Release as a safe fallback
+        DOWNLOAD_URL="https://github.com/$REPO_USER/$REPO_NAME/releases/latest/download/tycho"
+    fi
+elif [[ "$TYCHO_VERSION" =~ ^v[0-9] ]]; then
+    # Point to a specific tagged GitHub Release asset
+    DOWNLOAD_URL="https://github.com/$REPO_USER/$REPO_NAME/releases/download/$TYCHO_VERSION/tycho"
+else
+    # Fallback to downloading directly from a raw branch (e.g., 'main' or 'dev')
+    DOWNLOAD_URL="https://raw.githubusercontent.com/$REPO_USER/$REPO_NAME/$TYCHO_VERSION/tycho"
+fi
 
 # -------------------------------------------------------------
 # 1. Choose installation type for Tycho CLI

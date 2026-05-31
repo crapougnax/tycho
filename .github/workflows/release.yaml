@@ -25,5 +25,5 @@ jobs:
             *.md
             LICENSE
           draft: false
-          prerelease: ${{ startsWith(github.ref_name, 'v0.') }}
+          prerelease: ${{ startsWith(github.ref_name, 'v0.') || contains(github.ref_name, '-') }}
           generate_release_notes: true
