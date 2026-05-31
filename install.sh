@@ -127,9 +127,9 @@ safe_read() {
     local default_val="$3"
     local response=""
 
-    if [ -t 0 ]; then
+    if [[ -t 0 ]]; then
         read -rp "$prompt" response
-    elif [ -c /dev/tty ]; then
+    elif [[ -c /dev/tty ]]; then
         # Group and redirect stderr to suppress shell redirection errors if /dev/tty is not openable
         { read -rp "$prompt" response </dev/tty; } 2>/dev/null || response=""
     else

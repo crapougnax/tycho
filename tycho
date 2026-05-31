@@ -36,7 +36,7 @@ function log() { echo -e "\e[32m[tycho]\e[0m $1"; }
 function error() { echo -e "\e[31m[error]\e[0m $1"; exit 1; }
 
 function check_env() {
-    if [ ! -f "$ENV_FILE" ]; then
+    if [[ ! -f "$ENV_FILE" ]]; then
         error "Configuration file (.env) not found. Please run 'tycho setup' first."
     fi
 }
@@ -91,7 +91,7 @@ function resolve_local_pkg_dir() {
         return 0
     fi
 
-    if [ -d "$WORK_DIR/$PLATFORM/recipes/$pkg" ]; then
+    if [[ -d "$WORK_DIR/$PLATFORM/recipes/$pkg" ]]; then
         echo "$WORK_DIR/$PLATFORM/recipes/$pkg"
         return 0
     fi
@@ -101,10 +101,10 @@ function resolve_local_pkg_dir() {
         return 0
     fi
 
-    if [ -f "$WORK_DIR/repositories.json" ]; then
+    if [[ -f "$WORK_DIR/repositories.json" ]]; then
         local repos=$(jq -r '.[].name' "$WORK_DIR/repositories.json" 2>/dev/null)
         for r in $repos; do
-            if [ -d "$WORK_DIR/$PLATFORM/recipes/$r/$pkg" ]; then
+            if [[ -d "$WORK_DIR/$PLATFORM/recipes/$r/$pkg" ]]; then
                 echo "$WORK_DIR/$PLATFORM/recipes/$r/$pkg"
                 return 0
             fi
@@ -134,7 +134,7 @@ function find_recipe_repo() {
                 echo "official;$REPO_USER;$REPO_NAME;$REPO_BRANCH;$recipe_name"
                 return 0
             fi
-        elif [ -f "$WORK_DIR/repositories.json" ]; then
+        elif [[ -f "$WORK_DIR/repositories.json" ]]; then
             local repo_json=$(jq -c ".[] | select(.name == \"$r_name\")" "$WORK_DIR/repositories.json" 2>/dev/null)
             if [[ -n "$repo_json" ]]; then
                 local r_owner=$(echo "$repo_json" | jq -r '.owner')
@@ -156,7 +156,7 @@ function find_recipe_repo() {
         return 0
     fi
 
-    if [ -f "$WORK_DIR/repositories.json" ]; then
+    if [[ -f "$WORK_DIR/repositories.json" ]]; then
         local repos=$(jq -c '.[]' "$WORK_DIR/repositories.json" 2>/dev/null)
         if [[ -n "$repos" ]]; then
             while read -r repo_json; do
@@ -216,7 +216,7 @@ function check_required_config() {
     local app_name=$(basename "$pkg_dir")
     local base_storage=$(grep "^BASE_STORAGE_PATH=" "$ENV_FILE" | cut -d'=' -f2)
 
-    if [ -f "$pkg_dir/package.json" ]; then
+    if [[ -f "$pkg_dir/package.json" ]]; then
         local required=$(jq -r '.requiredEnv[]?' "$pkg_dir/package.json")
         for var in $required; do
             if ! grep -q "^$var=" "$ENV_FILE"; then
@@ -249,7 +249,7 @@ function check_required_config() {
 function do_setup() {
     log "Starting interactive setup (Mode: $([[ $EUID -eq 0 ]] && echo 'SYSTEM' || echo 'USER'))..."
     
-    if [ -f "$ENV_FILE" ]; then
+    if [[ -f "$ENV_FILE" ]]; then
         read -p "An .env file already exists. Overwrite? (y/N): " overwrite
         [[ "$overwrite" != "y" ]] && exit 0
     fi
@@ -259,7 +259,7 @@ function do_setup() {
         log "You should probably NOT install Traefik in USER mode."
     fi
 
-    if [ ! -f "$WORK_DIR/.env.dist" ]; then
+    if [[ ! -f "$WORK_DIR/.env.dist" ]]; then
         curl -s -f "$GITHUB_RAW/.env.dist" -o "$WORK_DIR/.env.dist" || error "Could not fetch .env.dist"
     fi
     
@@ -339,7 +339,7 @@ function do_install() {
     local base_storage=$(grep "^BASE_STORAGE_PATH=" "$ENV_FILE" | cut -d'=' -f2)
     if [[ "$is_core" == "false" ]] && [[ -n "$base_storage" ]]; then
         local app_storage="$base_storage/$app_name"
-        if [ ! -d "$app_storage" ]; then
+        if [[ ! -d "$app_storage" ]]; then
             log "Creating storage directory: $app_storage"
             mkdir -p "$app_storage"
         fi
@@ -410,7 +410,7 @@ function do_uninstall() {
     [[ -z "$pkg" ]] && error "Usage: tycho uninstall <package>"
 
     local target_dir=$(resolve_local_pkg_dir "$pkg")
-    if [ ! -d "$target_dir" ]; then
+    if [[ ! -d "$target_dir" ]]; then
         error "Package $pkg is not installed locally."
     fi
 
@@ -466,7 +466,7 @@ function do_list() {
     fetch_and_list_recipes "official" "$REPO_USER" "$REPO_NAME" "$REPO_BRANCH"
 
     # 2. Third-party Repositories
-    if [ -f "$WORK_DIR/repositories.json" ]; then
+    if [[ -f "$WORK_DIR/repositories.json" ]]; then
         local repos=$(jq -c '.[]' "$WORK_DIR/repositories.json" 2>/dev/null)
         if [[ -n "$repos" ]]; then
             while read -r repo_json; do
@@ -679,7 +679,7 @@ function do_repo() {
                 log "Found repository metadata: '$meta_name' - $r_desc"
             fi
 
-            if [ ! -f "$WORK_DIR/repositories.json" ]; then
+            if [[ ! -f "$WORK_DIR/repositories.json" ]]; then
                 echo "[]" > "$WORK_DIR/repositories.json"
             fi
             
@@ -708,7 +708,7 @@ function do_repo() {
             echo "----------------------------------------------------------------------------------------------------"
             printf "%-15s %-30s %-10s %s\n" "official" "$REPO_USER/$REPO_NAME" "$REPO_BRANCH" "Official Tycho core services and application recipes repository"
             
-            if [ -f "$WORK_DIR/repositories.json" ]; then
+            if [[ -f "$WORK_DIR/repositories.json" ]]; then
                 jq -c '.[]' "$WORK_DIR/repositories.json" 2>/dev/null | while read -r repo_json; do
                     if [[ -n "$repo_json" ]]; then
                         local r_name=$(echo "$repo_json" | jq -r '.name')
@@ -727,7 +727,7 @@ function do_repo() {
             local name=$2
             [[ -z "$name" ]] && error "Usage: tycho repo remove <name>"
             
-            if [ ! -f "$WORK_DIR/repositories.json" ]; then
+            if [[ ! -f "$WORK_DIR/repositories.json" ]]; then
                 error "No repositories configured."
             fi
             
@@ -752,7 +752,7 @@ function do_repo() {
                 log "  \e[31m[FAILED]\e[0m official repository is offline or invalid"
             fi
             
-            if [ -f "$WORK_DIR/repositories.json" ]; then
+            if [[ -f "$WORK_DIR/repositories.json" ]]; then
                 local repos=$(jq -c '.[]' "$WORK_DIR/repositories.json" 2>/dev/null)
                 if [[ -n "$repos" ]]; then
                     while read -r repo_json; do
@@ -1169,7 +1169,7 @@ function do_restore() {
     done
 
     [[ -z "$backup_file" ]] && error "Usage: tycho restore <backup_file_or_dir> [--non-interactive]"
-    [ ! -e "$backup_file" ] && error "Backup source '$backup_file' not found."
+    [[ ! -e "$backup_file" ]] && error "Backup source '$backup_file' not found."
 
     log "Reading backup manifest..."
     local manifest_content=""
@@ -1505,7 +1505,7 @@ case $1 in
     down)
         check_env
         local target_dir=$(resolve_local_pkg_dir "$2")
-        if [ ! -d "$target_dir" ]; then
+        if [[ ! -d "$target_dir" ]]; then
             error "Package $2 is not installed locally."
         fi
         cd "$target_dir" && podman compose --env-file "$ENV_FILE" down
@@ -1513,7 +1513,7 @@ case $1 in
     logs)
         check_env
         local target_dir=$(resolve_local_pkg_dir "$2")
-        if [ ! -d "$target_dir" ]; then
+        if [[ ! -d "$target_dir" ]]; then
             error "Package $2 is not installed locally."
         fi
         cd "$target_dir" && podman compose --env-file "$ENV_FILE" logs -f

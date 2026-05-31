@@ -6,7 +6,7 @@
 ENV_FILE="$1"
 gpu_detected=false
 
-if command -v nvidia-smi &>/dev/null || [ -c /dev/nvidia0 ]; then
+if command -v nvidia-smi &>/dev/null || [[ -c /dev/nvidia0 ]]; then
     gpu_detected=true
 fi
 
