@@ -445,14 +445,16 @@ function fetch_and_list_recipes() {
     local api_url="https://api.github.com/repos/$r_owner/$r_repo"
     local raw_url="https://raw.githubusercontent.com/$r_owner/$r_repo/$r_branch"
 
-    local recipes_json=$(curl -s -f "$api_url/contents/.tycho/recipes/$PLATFORM?ref=$r_branch")
+    local recipes_json
+    recipes_json=$(curl -s -f "$api_url/contents/.tycho/recipes/$PLATFORM?ref=$r_branch")
     if [[ $? -ne 0 ]]; then
         log "\e[33mWarning: Failed to reach GitHub API for repository '$r_name' ($r_owner/$r_repo).\e[0m"
         return
     fi
 
     echo "$recipes_json" | jq -r '.[] | select(.type == "dir") | .name' | while read -r name; do
-        local description=$(curl -s -f "$raw_url/.tycho/recipes/$PLATFORM/$name/package.json" | jq -r '.description // empty')
+        local description
+        description=$(curl -s -f "$raw_url/.tycho/recipes/$PLATFORM/$name/package.json" | jq -r '.description // empty' 2>/dev/null)
         printf "%-25s %-15s %s\n" "$name" "$r_name" "${description:-(No description)}"
     done
 }
@@ -487,9 +489,11 @@ function resolve_latest_matching_tag() {
     local tag=$3
 
     if [[ "$tag" =~ ^v?[0-9]+$ ]] || [[ "$tag" =~ ^v?[0-9]+\.[0-9]+$ ]] || [[ "$tag" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        local tags_json=$(curl -s -f "https://api.github.com/repos/$owner/$repo/tags")
+        local tags_json
+        tags_json=$(curl -s -f "https://api.github.com/repos/$owner/$repo/tags")
         if [[ $? -eq 0 ]] && [[ -n "$tags_json" ]] && [[ "$tags_json" != "[]" ]]; then
-            local tag_names=$(echo "$tags_json" | jq -r '.[].name' 2>/dev/null)
+            local tag_names
+            tag_names=$(echo "$tags_json" | jq -r '.[].name' 2>/dev/null)
             if [[ -n "$tag_names" ]]; then
                 local search_prefix="${tag#v}"
                 local matched_tags=""
@@ -520,7 +524,8 @@ function select_repository_tag() {
     local repo=$2
     local fallback_branch="main"
 
-    local tags_json=$(curl -s -f "https://api.github.com/repos/$owner/$repo/tags")
+    local tags_json
+    tags_json=$(curl -s -f "https://api.github.com/repos/$owner/$repo/tags")
     if [[ $? -ne 0 ]] || [[ -z "$tags_json" ]] || [[ "$tags_json" == "[]" ]]; then
         echo "$fallback_branch;false"
         return 0
@@ -625,6 +630,14 @@ function do_repo() {
             local source=$3
             [[ -z "$name" ]] || [[ -z "$source" ]] && error "Usage: tycho repo add <name> <owner>/<repo>[@branch]"
             
+            # Automatically clean up full GitHub URL formats
+            if [[ "$source" == *"github.com/"* ]]; then
+                source="${source#*github.com/}"
+            elif [[ "$source" == *"github.com:"* ]]; then
+                source="${source#*github.com:}"
+            fi
+            source="${source%.git}" # Strip optional .git suffix
+            
             if [[ ! "$name" =~ ^[a-zA-Z0-9-]+$ ]]; then
                 error "Invalid repository name. Use only letters, numbers, and hyphens."
             fi
@@ -638,11 +651,11 @@ function do_repo() {
             local branch="main"
             local has_tag=true
             
-            if [[ "$source" != *"@"* ]]; then
+            if [[ "$source" != *"*"* ]] && [[ "$source" != *"@"* ]]; then
                 has_tag=false
             fi
             
-            if [[ "$source" == *"@"* ]]; then
+            if [[ "$source" == *"*"* ]] || [[ "$source" == *"@"* ]]; then
                 local tmp_src="${source%%@*}"
                 branch="${source#*@}"
                 source="$tmp_src"
@@ -672,10 +685,12 @@ function do_repo() {
             
             # Fetch repository metadata description from .tycho/repository.json
             local r_desc=""
-            local meta_json=$(curl -s -f "https://raw.githubusercontent.com/$owner/$repo/$branch/.tycho/repository.json")
+            local meta_json
+            meta_json=$(curl -s -f "https://raw.githubusercontent.com/$owner/$repo/$branch/.tycho/repository.json")
             if [[ $? -eq 0 ]] && [[ -n "$meta_json" ]]; then
-                r_desc=$(echo "$meta_json" | jq -r '.description // empty')
-                local meta_name=$(echo "$meta_json" | jq -r '.name')
+                r_desc=$(echo "$meta_json" | jq -r '.description // empty' 2>/dev/null)
+                local meta_name
+                meta_name=$(echo "$meta_json" | jq -r '.name' 2>/dev/null)
                 log "Found repository metadata: '$meta_name' - $r_desc"
             fi
 
