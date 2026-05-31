@@ -77,6 +77,9 @@ function run_podman_compose() {
             source "$ENV_FILE"
             set +a
         fi
+        if [[ "$compose_bin" == *"docker-compose"* ]]; then
+            export DOCKER_HOST="unix://$PODMAN_SOCK"
+        fi
         $compose_bin "$@"
     )
     return $?
@@ -441,6 +444,7 @@ After=network.target
 
 [Service]
 Type=simple
+Environment=DOCKER_HOST=unix://$PODMAN_SOCK
 WorkingDirectory=$target_dir
 ExecStart=$compose_bin up
 ExecStop=$compose_bin down
