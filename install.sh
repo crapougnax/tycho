@@ -373,7 +373,20 @@ elif [[ "$TYCHO_VERSION" == "latest" ]]; then
     fi
 fi
 
+# Resolve active version number
+if [[ "$TYCHO_VERSION" == "latest" ]]; then
+    RESOLVED_VERSION=""
+    RESOLVED_VERSION=$(curl -s -f "https://api.github.com/repos/$REPO_USER/$REPO_NAME/releases" | jq -r '.[0].tag_name' 2>/dev/null)
+    if [[ $? -ne 0 ]] || [[ -z "$RESOLVED_VERSION" ]] || [[ "$RESOLVED_VERSION" == "null" ]]; then
+        RESOLVED_VERSION="latest"
+    fi
+else
+    RESOLVED_VERSION="$TYCHO_VERSION"
+fi
+
 if [[ "$download_success" == "true" ]]; then
+    # Inject the resolved version directly into the script source to bypass file issues
+    sed "s/TYCHO_VERSION=\".*\" # INJECTED_VERSION/TYCHO_VERSION=\"$RESOLVED_VERSION\" # INJECTED_VERSION/g" "$tmp_file" > "$tmp_file.tmp" && mv "$tmp_file.tmp" "$tmp_file"
     chmod +x "$tmp_file"
     if [[ "$USE_SUDO" == "true" ]]; then
         echo -e "Installing to $CLI_INSTALL_DIR/tycho (requires sudo)..."
@@ -397,17 +410,6 @@ if [[ "$cli_choice" -eq 1 ]]; then
 else
     echo "Initializing user config directory..."
     mkdir -p "$HOME/.tycho/podman/core" "$HOME/.tycho/podman/recipes"
-fi
-
-# Save active version number
-if [[ "$TYCHO_VERSION" == "latest" ]]; then
-    RESOLVED_VERSION=""
-    RESOLVED_VERSION=$(curl -s -f "https://api.github.com/repos/$REPO_USER/$REPO_NAME/releases" | jq -r '.[0].tag_name' 2>/dev/null)
-    if [[ $? -ne 0 ]] || [[ -z "$RESOLVED_VERSION" ]] || [[ "$RESOLVED_VERSION" == "null" ]]; then
-        RESOLVED_VERSION="latest"
-    fi
-else
-    RESOLVED_VERSION="$TYCHO_VERSION"
 fi
 
 if [[ "$cli_choice" -eq 1 ]]; then

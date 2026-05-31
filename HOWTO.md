@@ -250,11 +250,13 @@ The quick installer supports the `TYCHO_VERSION` environment variable. This allo
   ```
 - **Latest Development State (`main`)**: Downloads the latest commits directly from the `main` branch.
   ```bash
-  TYCHO_VERSION=main curl -fsSL https://tycho.cc/install.sh | bash
+  export TYCHO_VERSION=main
+  curl -fsSL https://tycho.cc/install.sh | bash
   ```
 - **Specific Tag/Version**: Downloads a specific release tag asset.
   ```bash
-  TYCHO_VERSION=v0.9.0 curl -fsSL https://tycho.cc/install.sh | bash
+  export TYCHO_VERSION=v0.9.0
+  curl -fsSL https://tycho.cc/install.sh | bash
   ```
 
 ### Release Automation

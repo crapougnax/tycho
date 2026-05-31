@@ -1545,6 +1545,8 @@ function do_upgrade() {
 
     local tmp_file=$(mktemp)
     if curl -s -f "$download_url" -o "$tmp_file"; then
+        # Inject the resolved version directly into the script source to bypass file issues
+        sed "s/TYCHO_VERSION=\".*\" # INJECTED_VERSION/TYCHO_VERSION=\"$resolved_version\" # INJECTED_VERSION/g" "$tmp_file" > "$tmp_file.tmp" && mv "$tmp_file.tmp" "$tmp_file"
         chmod 755 "$tmp_file"
         local dest_path=$(readlink -f "$0")
         if sudo mv "$tmp_file" "$dest_path"; then
@@ -1596,8 +1598,8 @@ function usage() {
 }
 
 # Load active version
-TYCHO_VERSION="unknown"
-if [[ -f "$WORK_DIR/version" ]]; then
+TYCHO_VERSION="unknown" # INJECTED_VERSION
+if [[ "$TYCHO_VERSION" == "unknown" ]] && [[ -f "$WORK_DIR/version" ]]; then
     TYCHO_VERSION=$(cat "$WORK_DIR/version")
 fi
 

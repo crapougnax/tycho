@@ -21,7 +21,7 @@ curl -fsSL https://tycho.cc/install.sh | bash
 ```
 
 > [!TIP]
-> **Developer Options**: You can specify custom branches or tag versions during installation using the `TYCHO_VERSION` environment variable (e.g., `TYCHO_VERSION=main` to install the latest development state, or `TYCHO_VERSION=v0.9.0` to target a specific release).
+> **Developer Options**: You can specify custom branches or tag versions during installation using the `TYCHO_VERSION` environment variable (e.g., run `export TYCHO_VERSION=main` to install the latest development state, or `export TYCHO_VERSION=v0.9.0` to target a specific release before running the installer).
 
 ---
 
