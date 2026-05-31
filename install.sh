@@ -215,9 +215,11 @@ if [[ "$OS_TYPE" == "Linux" ]]; then
     echo "   - Enable user session lingering (keeps containers running after logout)."
     echo "   - Allow unprivileged port binding below 1024 (for ports 80/443)."
     echo ""
-    safe_read "Optimize rootless Podman for the current user ($USER)? (Y/n): " optimize_choice y
+    echo "   1) Yes, optimize rootless Podman (recommended)"
+    echo "   2) No, skip optimization"
+    safe_read "Choice [1-2, default: 1]: " optimize_choice 1
 
-    if [[ "$optimize_choice" =~ ^[Yy]$ ]]; then
+    if [[ "$optimize_choice" -eq 1 ]]; then
         echo -e "${BLUE}Configuring user session lingering...${NC}"
         loginctl enable-linger "$USER" || echo -e "${YELLOW}Warning: Could not enable lingering. Make sure systemd-logind is active.${NC}"
 
