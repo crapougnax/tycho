@@ -1,5 +1,7 @@
 # Tycho
 
+**Latest Release:** [v0.9.10](https://github.com/tycho-ops/tycho/releases/tag/v0.9.10) (June 13, 2026)
+
 Tycho is an autonomous server management CLI designed to deploy and manage a complete, self-hosted infrastructure using Podman. It supports two primary deployment patterns.
 
 Before diving in, check out the [Tycho Philosophy](PHILOSOPHY.md) to understand the project's core principles. For comprehensive setup guides and architectural instructions, see the [Tycho HOWTO](HOWTO.md).
