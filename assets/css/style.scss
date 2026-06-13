@@ -16,3 +16,107 @@ body, p, li, blockquote, section {
   line-height: 1.75 !important;
 }
 
+/* Custom Copy Command Component Styles */
+.copy-command-container {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(20, 20, 20, 0.7);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(0, 255, 0, 0.25);
+  border-radius: 6px;
+  padding: 12px 18px;
+  margin: 20px 0;
+  font-family: Monaco, "Bitstream Vera Sans Mono", "Lucida Console", Terminal, monospace;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+.copy-command-container::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: radial-gradient(circle at 100% 50%, rgba(0, 255, 0, 0.03), transparent 60%);
+  pointer-events: none;
+}
+
+.copy-command-container:hover {
+  border-color: rgba(0, 255, 0, 0.6);
+  box-shadow: 0 0 18px rgba(0, 255, 0, 0.18), 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+.copy-command-text {
+  font-family: inherit !important;
+  color: #00ff00 !important;
+  font-size: 1.05em !important;
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  user-select: all;
+  white-space: nowrap;
+  overflow-x: auto;
+  flex-grow: 1;
+  margin-right: 15px;
+}
+
+/* Custom scrollbar for copy command text */
+.copy-command-text::-webkit-scrollbar {
+  height: 4px;
+}
+.copy-command-text::-webkit-scrollbar-track {
+  background: transparent;
+}
+.copy-command-text::-webkit-scrollbar-thumb {
+  background: rgba(0, 255, 0, 0.3);
+  border-radius: 2px;
+}
+.copy-command-text::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 255, 0, 0.6);
+}
+
+.copy-command-btn {
+  background: rgba(0, 255, 0, 0.08);
+  border: 1px solid rgba(0, 255, 0, 0.3);
+  border-radius: 4px;
+  padding: 8px;
+  color: #00ff00;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  outline: none;
+  flex-shrink: 0;
+}
+
+.copy-command-btn:hover {
+  background: rgba(0, 255, 0, 0.18);
+  border-color: rgba(0, 255, 0, 0.8);
+  transform: scale(1.05);
+  box-shadow: 0 0 8px rgba(0, 255, 0, 0.3);
+}
+
+.copy-command-btn:active {
+  transform: scale(0.95);
+}
+
+.copy-command-btn.copied {
+  background: rgba(0, 255, 0, 0.25);
+  border-color: #00ff00;
+  box-shadow: 0 0 12px rgba(0, 255, 0, 0.5);
+  animation: pulse-green 0.5s ease-out;
+}
+
+@keyframes pulse-green {
+  0% { box-shadow: 0 0 0 0 rgba(0, 255, 0, 0.7); }
+  70% { box-shadow: 0 0 0 10px rgba(0, 255, 0, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 255, 0, 0); }
+}
+

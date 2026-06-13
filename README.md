@@ -18,9 +18,46 @@ Before diving in, check out the [Tycho Philosophy](PHILOSOPHY.md) to understand 
 ## Quick Install
 
 Deploy the latest stable release:
-```bash
-curl -fsSL https://tycho.cc/install.sh | bash
-```
+
+<div class="copy-command-container">
+  <code class="copy-command-text">curl -fsSL https://tycho.cc/install.sh | bash</code>
+  <button class="copy-command-btn" onclick="copyInstallCommand(this)" aria-label="Copy install command">
+    <svg class="icon-copy" viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+    </svg>
+    <svg class="icon-check" viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
+      <polyline points="20 6 9 17 4 12"></polyline>
+    </svg>
+  </button>
+</div>
+
+<script>
+function copyInstallCommand(btn) {
+  const text = btn.parentNode.querySelector('.copy-command-text').innerText;
+  navigator.clipboard.writeText(text).then(() => {
+    if (typeof gtag === 'function') {
+      gtag('event', 'click', {
+        'event_category': 'CTA',
+        'event_label': 'Copy Install Command: ' + text
+      });
+    }
+    const iconCopy = btn.querySelector('.icon-copy');
+    const iconCheck = btn.querySelector('.icon-check');
+    iconCopy.style.display = 'none';
+    iconCheck.style.display = 'inline';
+    btn.classList.add('copied');
+    setTimeout(() => {
+      iconCopy.style.display = 'inline';
+      iconCheck.style.display = 'none';
+      btn.classList.remove('copied');
+    }, 2000);
+  }).catch(err => {
+    console.error('Failed to copy: ', err);
+  });
+}
+</script>
+
 
 > [!TIP]
 > **Developer Options**: You can specify custom branches or tag versions during installation using the `TYCHO_VERSION` environment variable (e.g., run `export TYCHO_VERSION=main` to install the latest development state, or `export TYCHO_VERSION=v0.9.0` to target a specific release before running the installer).

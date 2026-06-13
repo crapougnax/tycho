@@ -287,19 +287,71 @@ If you are contributing to the core Tycho project, this guide explains how the i
 The quick installer supports the `TYCHO_VERSION` environment variable. This allows developers and administrators to deploy and test different states of the CLI:
 
 - **Stable Release (Default)**: Downloads the latest official compiled release binary and assets.
-  ```bash
-  curl -fsSL https://tycho.cc/install.sh | bash
-  ```
+  <div class="copy-command-container">
+    <code class="copy-command-text">curl -fsSL https://tycho.cc/install.sh | bash</code>
+    <button class="copy-command-btn" onclick="copyInstallCommand(this)" aria-label="Copy install command">
+      <svg class="icon-copy" viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+      </svg>
+      <svg class="icon-check" viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
+        <polyline points="20 6 9 17 4 12"></polyline>
+      </svg>
+    </button>
+  </div>
 - **Latest Development State (`main`)**: Downloads the latest commits directly from the `main` branch.
-  ```bash
-  export TYCHO_VERSION=main
-  curl -fsSL https://tycho.cc/install.sh | bash
-  ```
+  <div class="copy-command-container">
+    <code class="copy-command-text">export TYCHO_VERSION=main && curl -fsSL https://tycho.cc/install.sh | bash</code>
+    <button class="copy-command-btn" onclick="copyInstallCommand(this)" aria-label="Copy install command">
+      <svg class="icon-copy" viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+      </svg>
+      <svg class="icon-check" viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
+        <polyline points="20 6 9 17 4 12"></polyline>
+      </svg>
+    </button>
+  </div>
 - **Specific Tag/Version**: Downloads a specific release tag asset.
-  ```bash
-  export TYCHO_VERSION=v0.9.0
-  curl -fsSL https://tycho.cc/install.sh | bash
-  ```
+  <div class="copy-command-container">
+    <code class="copy-command-text">export TYCHO_VERSION=v0.9.0 && curl -fsSL https://tycho.cc/install.sh | bash</code>
+    <button class="copy-command-btn" onclick="copyInstallCommand(this)" aria-label="Copy install command">
+      <svg class="icon-copy" viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+      </svg>
+      <svg class="icon-check" viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
+        <polyline points="20 6 9 17 4 12"></polyline>
+      </svg>
+    </button>
+  </div>
+
+<script>
+function copyInstallCommand(btn) {
+  const text = btn.parentNode.querySelector('.copy-command-text').innerText;
+  navigator.clipboard.writeText(text).then(() => {
+    if (typeof gtag === 'function') {
+      gtag('event', 'click', {
+        'event_category': 'CTA',
+        'event_label': 'Copy Install Command: ' + text
+      });
+    }
+    const iconCopy = btn.querySelector('.icon-copy');
+    const iconCheck = btn.querySelector('.icon-check');
+    iconCopy.style.display = 'none';
+    iconCheck.style.display = 'inline';
+    btn.classList.add('copied');
+    setTimeout(() => {
+      iconCopy.style.display = 'inline';
+      iconCheck.style.display = 'none';
+      btn.classList.remove('copied');
+    }, 2000);
+  }).catch(err => {
+    console.error('Failed to copy: ', err);
+  });
+}
+</script>
+
 
 ### Release Automation
 We use a GitHub Actions workflow to publish releases automatically:
