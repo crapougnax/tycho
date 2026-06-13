@@ -35,13 +35,38 @@ jobs:
             echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
           fi
 
-      - name: Create and Push Tag
+      - name: Update Version, Commit, and Tag
         if: steps.detect_version.outputs.should_release == 'true'
         run: |
+          CURRENT_VERSION="${{ steps.detect_version.outputs.version }}"
+          RELEASE_DATE=$(date +%Y-%m-%d)
+          HUMAN_DATE=$(date +"%B %d, %Y")
+          
+          echo "Updating documentation to version v$CURRENT_VERSION ($RELEASE_DATE / $HUMAN_DATE)..."
+          
+          # Update _config.yml
+          sed -E -i "s/— v[0-9.]+ \([0-9-]+\)/— v${CURRENT_VERSION} (${RELEASE_DATE})/g" _config.yml
+          
+          # Update README.md and HOWTO.md
+          sed -E -i "s/\*\*Latest Release:\*\* \[v[0-9.]*\]\(https:\/\/github.com\/tycho-ops\/tycho\/releases\/tag\/v[0-9.]*\) \([A-Za-z0-9 ,]*\)/**Latest Release:** [v${CURRENT_VERSION}](https:\/\/github.com\/tycho-ops\/tycho\/releases\/tag\/v${CURRENT_VERSION}) (${HUMAN_DATE})/g" README.md HOWTO.md
+          
+          # Inject version into the release CLI asset (but don't commit it to main)
+          sed -E -i 's/TYCHO_VERSION="unknown" # INJECTED_VERSION/TYCHO_VERSION="v'"${CURRENT_VERSION}"'" # INJECTED_VERSION/g' tycho
+          
+          # Configure Git
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "v${{ steps.detect_version.outputs.version }}" -m "Release v${{ steps.detect_version.outputs.version }}"
-          git push origin "v${{ steps.detect_version.outputs.version }}"
+          
+          # Commit & Push changes to main branch if any
+          if ! git diff --quiet _config.yml README.md HOWTO.md; then
+            git add _config.yml README.md HOWTO.md
+            git commit -m "docs: release version v$CURRENT_VERSION [skip ci]"
+            git push origin main
+          fi
+          
+          # Create and Push Tag
+          git tag -a "v$CURRENT_VERSION" -m "Release v$CURRENT_VERSION"
+          git push origin "v$CURRENT_VERSION"
 
       - name: Create GitHub Release
         if: steps.detect_version.outputs.should_release == 'true'
